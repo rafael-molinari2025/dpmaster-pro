@@ -1,0 +1,7 @@
+streamlit
+pandas
+pillow
+reportlab
+openpyxl
+cryptography
+plotly

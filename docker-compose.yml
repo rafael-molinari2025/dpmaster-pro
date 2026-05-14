@@ -1,0 +1,73 @@
+# ============================================================
+# DPMaster Pro — Docker Compose (Produção)
+# Stack: Streamlit + Nginx (Reverse Proxy) + Certbot (SSL)
+# ============================================================
+
+services:
+  # ── Aplicação Principal ─────────────────────────────────
+  dpmaster:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dpmaster-app
+    restart: unless-stopped
+    volumes:
+      - dpmaster_data:/app/data_dp
+      - dpmaster_backups:/app/data_dp_backups
+    networks:
+      - dpmaster-net
+    expose:
+      - "8501"
+    environment:
+      - TZ=America/Sao_Paulo
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Reverse Proxy (Nginx) ───────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: dpmaster-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot_www:/var/www/certbot:ro
+      - certbot_conf:/etc/letsencrypt:ro
+    depends_on:
+      dpmaster:
+        condition: service_healthy
+    networks:
+      - dpmaster-net
+
+  # ── Certbot (SSL/Let's Encrypt) ─────────────────────────
+  certbot:
+    image: certbot/certbot
+    container_name: dpmaster-certbot
+    volumes:
+      - certbot_www:/var/www/certbot
+      - certbot_conf:/etc/letsencrypt
+    # Renovação automática a cada 12 horas
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done;'"
+
+# ── Volumes Persistentes ────────────────────────────────
+volumes:
+  dpmaster_data:
+    name: dpmaster_data
+  dpmaster_backups:
+    name: dpmaster_backups
+  certbot_www:
+    name: dpmaster_certbot_www
+  certbot_conf:
+    name: dpmaster_certbot_conf
+
+# ── Rede Interna ────────────────────────────────────────
+networks:
+  dpmaster-net:
+    name: dpmaster-net
+    driver: bridge

@@ -1,0 +1,22 @@
+[theme]
+# Tema claro com alto contraste
+base = "light"
+primaryColor       = "#2563eb"
+backgroundColor    = "#f8fafc"
+secondaryBackgroundColor = "#e2e8f0"
+textColor          = "#1e293b"
+font               = "sans serif"
+
+[server]
+headless = true
+address = "0.0.0.0"
+port = 8501
+enableCORS = false
+enableXsrfProtection = true
+maxUploadSize = 10
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

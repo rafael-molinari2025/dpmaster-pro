@@ -1,0 +1,46 @@
+# Ambientes virtuais e runtime local
+venv/
+python_runtime/
+__pycache__/
+*.pyc
+
+# Executáveis e builds locais
+*.exe
+dist/
+build/
+*.spec
+
+# Dados locais (serão montados como volumes)
+data_dp/
+data_dp_backups/
+
+# Scripts Windows/locais
+*.bat
+PREPARAR_PORTATIL.py
+configurar_executavel.py
+fix_css.py
+super_limpeza.py
+launcher.py
+
+# Arquivos de desenvolvimento
+scratch/
+marketing_capturas/
+*.log
+debug_launcher.log
+porta_ativa.txt
+
+# Git e IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Deploy (não precisa estar dentro da imagem)
+deploy/
+nginx/
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Documentação de build
+*.md

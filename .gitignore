@@ -1,0 +1,54 @@
+# ── Ambientes virtuais e runtime Python ─────────────────
+venv/
+python_runtime/
+.env
+.venv/
+
+# ── Python cache ─────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# ── Executáveis e builds ──────────────────────────────────
+*.exe
+*.spec
+dist/
+build/
+
+# ── Dados locais (SENSÍVEIS — nunca versionar) ────────────
+data_dp/
+data_dp_backups/
+*.key
+
+# ── Pastas de trabalho e temporárias ─────────────────────
+scratch/
+marketing_capturas/
+DP/
+
+# ── Logs ─────────────────────────────────────────────────
+*.log
+*.log.*
+porta_ativa.txt
+debug_launcher.log
+
+# ── Scripts de uso local / Windows-specific ──────────────
+*.bat
+PREPARAR_PORTATIL.py
+configurar_executavel.py
+fix_css.py
+super_limpeza.py
+launcher.py
+
+# ── IDE e editor ─────────────────────────────────────────
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Sistema operacional ───────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
