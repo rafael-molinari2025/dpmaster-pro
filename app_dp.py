@@ -665,6 +665,42 @@ def fmt_tamanho(bytes_val: int) -> str:
         return f"{bytes_val/(1024*1024):.1f} MB"
 
 
+def _pdf_store(sk: str, buf) -> bool:
+    """Armazena BytesIO de PDF no session_state. Retorna True se gerado com sucesso."""
+    if buf is not None:
+        st.session_state[sk] = buf.getvalue()
+        return True
+    st.error("Erro ao gerar PDF. Verifique os dados e tente novamente.")
+    return False
+
+
+def _pdf_btn(sk: str, filename: str, label: str = "⬇️ Baixar PDF") -> None:
+    """Exibe botão de download se o PDF estiver salvo no session_state."""
+    if sk in st.session_state:
+        st.download_button(label, data=st.session_state[sk],
+                           file_name=filename, mime="application/pdf",
+                           key=f"_dl_{sk}")
+
+
+def _xml_store(sk: str, caminho: str) -> bool:
+    """Lê arquivo XML do disco e armazena no session_state."""
+    try:
+        with open(caminho, "rb") as f:
+            st.session_state[sk] = f.read()
+        return True
+    except Exception as e:
+        st.error(f"Erro ao ler XML: {e}")
+        return False
+
+
+def _xml_btn(sk: str, filename: str, label: str = "⬇️ Baixar XML") -> None:
+    """Exibe botão de download de XML se estiver salvo no session_state."""
+    if sk in st.session_state:
+        st.download_button(label, data=st.session_state[sk],
+                           file_name=filename, mime="application/xml",
+                           key=f"_dl_{sk}")
+
+
 # ====================== GERAÇÃO DE PDF (ReportLab) ======================
 def _estilos():
     styles = getSampleStyleSheet()
@@ -2034,11 +2070,12 @@ else:
                                 zip_buffer = BytesIO()
                                 with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
                                     # 1. Ficha de Registro
-                                    pdf_ficha = gerar_pdf_ficha_registro(func_doc)
+                                    _buf_ficha = gerar_ficha_cadastro_pdf(func_doc)
+                                    pdf_ficha = _buf_ficha.getvalue() if _buf_ficha else b""
                                     zip_file.writestr(f"01_Ficha_Registro_{func_doc['nome'].replace(' ','_')}.pdf", pdf_ficha)
-                                    
+
                                     # 2. Contrato de Trabalho (Baseado na ficha por enquanto)
-                                    zip_file.writestr(f"02_Contrato_Trabalho_{func_doc['nome'].replace(' ','_')}.pdf", pdf_ficha) 
+                                    zip_file.writestr(f"02_Contrato_Trabalho_{func_doc['nome'].replace(' ','_')}.pdf", pdf_ficha)
                                     
                                 st.download_button(
                                     "⬇️ Baixar Kit ZIP",
@@ -2311,14 +2348,12 @@ else:
                             if folha.get("calculado_em"):
                                 st.caption(f"Calculado em: {folha['calculado_em'][:16].replace('T',' ')}")
                             col_pdf, col_cancel = st.columns(2)
+                            _sk_cc = f"_pdf_cc_{func['id']}_{mes}"
                             with col_pdf:
                                 if st.button("📄 Contracheque PDF", key=f"pdf_{func['id']}_{mes}"):
-                                    buf = gerar_contracheque_pdf(func, mes)
-                                    if buf:
-                                        st.download_button("⬇️ Baixar PDF", buf,
-                                                           file_name=f"contracheque_{func['nome'].replace(' ','_')}_{mes.replace('/','')}.pdf",
-                                                           mime="application/pdf",
-                                                           key=f"dl_pdf_{func['id']}_{mes}")
+                                    _pdf_store(_sk_cc, gerar_contracheque_pdf(func, mes))
+                                _pdf_btn(_sk_cc,
+                                         f"contracheque_{func['nome'].replace(' ','_')}_{mes.replace('/','')}.pdf")
                             with col_cancel:
                                 if st.button("🗑️ Cancelar", key=f"cancel_{func['id']}_{mes}"):
                                     del func["folha_pagamento"][mes]
@@ -2442,16 +2477,15 @@ else:
                                 st.write(f"**(-) IRRF:** {fmt_brl(folha_13['irrf_13'])}")
                             st.success(f"**Líquido:** {fmt_brl(folha_13.get('decimo_terceiro_liquido',0))}")
                             col_pdf, col_cancel = st.columns(2)
+                            _sk_13 = f"_pdf_13_{func['id']}_{mes_ref}"
                             with col_pdf:
                                 if st.button("📄 PDF 13º", key=f"pdf_13_{func['id']}_{mes_ref}"):
-                                    buf = gerar_decimo_pdf(func, ano, tipo,
-                                                           folha_13.get("decimo_terceiro_bruto", 0),
-                                                           folha_13.get("avos_13", 12))
-                                    if buf:
-                                        st.download_button("⬇️ Baixar", buf,
-                                                           file_name=f"13salario_{func['nome'].replace(' ','_')}_{mes_ref.replace('/','')}.pdf",
-                                                           mime="application/pdf",
-                                                           key=f"dl_13_{func['id']}_{mes_ref}")
+                                    _pdf_store(_sk_13, gerar_decimo_pdf(func, ano, tipo,
+                                                                         folha_13.get("decimo_terceiro_bruto", 0),
+                                                                         folha_13.get("avos_13", 12)))
+                                _pdf_btn(_sk_13,
+                                         f"13salario_{func['nome'].replace(' ','_')}_{mes_ref.replace('/','')}.pdf",
+                                         label="⬇️ Baixar")
                             with col_cancel:
                                 if st.button("🗑️ Cancelar 13º", key=f"cancel_13_{func['id']}_{mes_ref}"):
                                     del func["folha_pagamento"][mes_ref]
@@ -2567,13 +2601,12 @@ else:
                             st.success("Férias salvas!")
                             del st.session_state[calc_key]
                             st.rerun()
+                    _sk_fv = f"_pdf_fv_{func['id']}_{mes}"
                     with col_pdf:
                         if st.button("📄 PDF Férias"):
-                            buf = gerar_ferias_pdf(func, mes, vf)
-                            if buf:
-                                st.download_button("⬇️ Baixar PDF", buf,
-                                                   file_name=f"ferias_{func['nome'].replace(' ','_')}_{mes.replace('/','')}.pdf",
-                                                   mime="application/pdf", key=f"dl_ferias_{func['id']}")
+                            _pdf_store(_sk_fv, gerar_ferias_pdf(func, mes, vf))
+                        _pdf_btn(_sk_fv,
+                                 f"ferias_{func['nome'].replace(' ','_')}_{mes.replace('/','')}.pdf")
         except Exception as e:
             logger.error(f"Erro Férias: {e}")
             st.error(f"Erro: {e}")
@@ -2693,13 +2726,12 @@ else:
                     st.success(f"**LÍQUIDO A RECEBER: {fmt_brl(valores.get('liquido',0))}**")
 
                     col_pdf_r, col_xml_r = st.columns(2)
+                    _sk_resc = f"_pdf_resc_{func['id']}"
                     with col_pdf_r:
                         if st.button("📄 PDF Rescisão"):
-                            buf = gerar_rescisao_pdf(func, data_des, motivo, valores)
-                            if buf:
-                                st.download_button("⬇️ Baixar PDF", buf,
-                                                   file_name=f"rescisao_{func['nome'].replace(' ','_')}_{str(data_des).replace('-','')}.pdf",
-                                                   mime="application/pdf", key="dl_resc_pdf")
+                            _pdf_store(_sk_resc, gerar_rescisao_pdf(func, data_des, motivo, valores))
+                        _pdf_btn(_sk_resc,
+                                 f"rescisao_{func['nome'].replace(' ','_')}_{str(data_des).replace('-','')}.pdf")
                     with col_xml_r:
                         if st.button("📤 XML eSocial + Fila"):
                             caminho, arq, _ = gerar_xml_desligamento(func, str(data_des), motivo)
@@ -2713,9 +2745,11 @@ else:
                                     dados_extras={"motivo": motivo, "data_desligamento": str(data_des)}
                                 )
                                 st.success(f"✅ XML gerado e adicionado à fila eSocial (ID #{ev_id})")
-                                with open(caminho, "rb") as xf:
-                                    st.download_button("⬇️ Baixar XML", xf, file_name=arq,
-                                                       mime="application/xml", key="dl_resc_xml")
+                                _xml_store("_xml_resc_data", caminho)
+                                st.session_state["_xml_resc_arq"] = arq
+                        _xml_btn("_xml_resc_data",
+                                 st.session_state.get("_xml_resc_arq", "S-2299.xml"),
+                                 label="⬇️ Baixar XML")
 
                     if st.button("⚠️ Confirmar Desligamento (Inativar)"):
                         func["situacao"] = "Inativo"
@@ -2865,11 +2899,10 @@ else:
                             if arq_xml:
                                 caminho_xml_ev = os.path.join(ESOCIAL_DIR, arq_xml)
                                 if os.path.exists(caminho_xml_ev):
-                                    with open(caminho_xml_ev, "rb") as xfev:
-                                        st.download_button("⬇️ Baixar XML", xfev,
-                                                           file_name=arq_xml,
-                                                           mime="application/xml",
-                                                           key=f"dl_xml_fila_{ev['id']}")
+                                    _sk_ev = f"_xml_fila_{ev['id']}"
+                                    if _sk_ev not in st.session_state:
+                                        _xml_store(_sk_ev, caminho_xml_ev)
+                                    _xml_btn(_sk_ev, arq_xml)
 
                 # Ação em lote
                 st.divider()
@@ -2975,9 +3008,11 @@ else:
                                 )
                                 st.success(f"✅ XML gerado e adicionado à fila (ID #{ev_id})")
                                 st.code(xml_str[:2000] + ("\n... [truncado]" if len(xml_str) > 2000 else ""), language="xml")
-                                with open(caminho, "rb") as xf:
-                                    st.download_button("⬇️ Baixar XML S-1200", xf, file_name=arq,
-                                                       mime="application/xml", key="dl_1200")
+                                _xml_store("_xml_1200_data", caminho)
+                                st.session_state["_xml_1200_arq"] = arq
+                        _xml_btn("_xml_1200_data",
+                                 st.session_state.get("_xml_1200_arq", "S-1200.xml"),
+                                 label="⬇️ Baixar XML S-1200")
                     else:
                         st.warning("Calcule a folha de pagamento antes de gerar o XML.")
 
@@ -3006,9 +3041,11 @@ else:
                                 )
                                 st.success(f"✅ XML gerado e adicionado à fila (ID #{ev_id})")
                                 st.code(xml_str[:2000] + ("\n... [truncado]" if len(xml_str) > 2000 else ""), language="xml")
-                                with open(caminho, "rb") as xf:
-                                    st.download_button("⬇️ Baixar XML S-2200", xf, file_name=arq,
-                                                       mime="application/xml", key="dl_2200")
+                                _xml_store("_xml_2200_data", caminho)
+                                st.session_state["_xml_2200_arq"] = arq
+                        _xml_btn("_xml_2200_data",
+                                 st.session_state.get("_xml_2200_arq", "S-2200.xml"),
+                                 label="⬇️ Baixar XML S-2200")
 
                 with sub_xml_tab3:
                     st.write("**S-2299 — Desligamento** (Evento Não Periódico)")
@@ -3036,9 +3073,11 @@ else:
                                 )
                                 st.success(f"✅ XML gerado e adicionado à fila (ID #{ev_id})")
                                 st.code(xml_str[:2000] + ("\n... [truncado]" if len(xml_str) > 2000 else ""), language="xml")
-                                with open(caminho, "rb") as xf:
-                                    st.download_button("⬇️ Baixar XML S-2299", xf, file_name=arq,
-                                                       mime="application/xml", key="dl_2299")
+                                _xml_store("_xml_2299_data", caminho)
+                                st.session_state["_xml_2299_arq"] = arq
+                        _xml_btn("_xml_2299_data",
+                                 st.session_state.get("_xml_2299_arq", "S-2299.xml"),
+                                 label="⬇️ Baixar XML S-2299")
 
         except Exception as e:
             logger.error(f"Erro eSocial Painel: {e}\n{traceback.format_exc()}")
@@ -3342,11 +3381,9 @@ else:
 
                 elif tipo == "Folha Analítica PDF":
                     if st.button("📄 Gerar"):
-                        buf = gerar_folha_analitica_pdf(funcs, mes)
-                        if buf:
-                            st.download_button("⬇️ Baixar PDF", buf,
-                                               file_name=f"folha_analitica_{mes.replace('/','')}.pdf",
-                                               mime="application/pdf", key="dl_folha_pdf")
+                        _pdf_store("_pdf_folha_analitica", gerar_folha_analitica_pdf(funcs, mes))
+                    _pdf_btn("_pdf_folha_analitica",
+                             f"folha_analitica_{mes.replace('/','')}.pdf")
 
                 elif tipo == "Resumo Geral da Folha":
                     total_b = 0.0
@@ -3405,32 +3442,26 @@ else:
                     st.metric("FGTS Patronal (8%)", fmt_brl(round(fgts_patronal, 2)))
                     st.metric("CUSTO TOTAL ESTIMADO", fmt_brl(round(total_b + encargos_patronais + fgts_patronal, 2)))
                     if st.button("📄 Exportar PDF"):
-                        buf = gerar_resumo_folha_pdf(funcs, mes)
-                        if buf:
-                            st.download_button("⬇️ Baixar PDF", buf,
-                                               file_name=f"resumo_folha_{mes.replace('/','')}.pdf",
-                                               mime="application/pdf", key="dl_resumo_pdf")
+                        _pdf_store("_pdf_resumo_folha", gerar_resumo_folha_pdf(funcs, mes))
+                    _pdf_btn("_pdf_resumo_folha",
+                             f"resumo_folha_{mes.replace('/','')}.pdf")
 
                 elif tipo == "Ficha de Cadastro PDF":
                     nome_fc = st.selectbox("Funcionário", [f["nome"] for f in funcs], key="ficha_cad_sel")
                     func_fc = next(f for f in funcs if f["nome"] == nome_fc)
                     if st.button("📄 Gerar"):
-                        buf = gerar_ficha_cadastro_pdf(func_fc)
-                        if buf:
-                            st.download_button("⬇️ Baixar PDF", buf,
-                                               file_name=f"ficha_{func_fc['nome'].replace(' ','_')}.pdf",
-                                               mime="application/pdf", key="dl_ficha_pdf")
+                        _pdf_store("_pdf_ficha_cad", gerar_ficha_cadastro_pdf(func_fc))
+                    _pdf_btn("_pdf_ficha_cad",
+                             f"ficha_{func_fc['nome'].replace(' ','_')}.pdf")
 
                 elif tipo == "Ficha Financeira Anual PDF":
                     nome_ffa = st.selectbox("Funcionário", [f["nome"] for f in funcs], key="ffa_sel")
                     func_ffa = next(f for f in funcs if f["nome"] == nome_ffa)
                     ano_ffa = st.selectbox("Ano", [2024,2025,2026], index=2, key="ffa_ano")
                     if st.button("📄 Gerar"):
-                        buf = gerar_ficha_financeira_anual_pdf(func_ffa, ano_ffa)
-                        if buf:
-                            st.download_button("⬇️ Baixar PDF", buf,
-                                               file_name=f"ficha_financeira_{func_ffa['nome'].replace(' ','_')}_{ano_ffa}.pdf",
-                                               mime="application/pdf", key="dl_fin_pdf")
+                        _pdf_store("_pdf_ficha_fin", gerar_ficha_financeira_anual_pdf(func_ffa, ano_ffa))
+                    _pdf_btn("_pdf_ficha_fin",
+                             f"ficha_financeira_{func_ffa['nome'].replace(' ','_')}_{ano_ffa}.pdf")
 
                 elif tipo == "13º Salário PDF":
                     nome_13 = st.selectbox("Funcionário", [f["nome"] for f in funcs], key="r13_sel")
@@ -3439,14 +3470,14 @@ else:
                     folha_13 = func_13.get("folha_pagamento",{}).get(mes_13,{})
                     if "decimo_terceiro_bruto" in folha_13:
                         if st.button("📄 Gerar"):
-                            buf = gerar_decimo_pdf(func_13, int(mes_13.split("/")[1]),
-                                                   folha_13.get("tipo_13","Final"),
-                                                   folha_13.get("decimo_terceiro_bruto",0),
-                                                   folha_13.get("avos_13",12))
-                            if buf:
-                                st.download_button("⬇️ Baixar", buf,
-                                                   file_name=f"13salario_{func_13['nome'].replace(' ','_')}_{mes_13.replace('/','')}.pdf",
-                                                   mime="application/pdf", key="dl_13_r")
+                            _pdf_store("_pdf_rel_13", gerar_decimo_pdf(
+                                func_13, int(mes_13.split("/")[1]),
+                                folha_13.get("tipo_13","Final"),
+                                folha_13.get("decimo_terceiro_bruto",0),
+                                folha_13.get("avos_13",12)))
+                        _pdf_btn("_pdf_rel_13",
+                                 f"13salario_{func_13['nome'].replace(' ','_')}_{mes_13.replace('/','')}.pdf",
+                                 label="⬇️ Baixar")
                     else:
                         st.warning("13º não calculado para este mês.")
 
@@ -3456,11 +3487,10 @@ else:
                     folha_fv = func_fv.get("folha_pagamento",{}).get(mes,{})
                     if "total_liquido" in folha_fv:
                         if st.button("📄 Gerar"):
-                            buf = gerar_ferias_pdf(func_fv, mes, folha_fv)
-                            if buf:
-                                st.download_button("⬇️ Baixar", buf,
-                                                   file_name=f"ferias_{func_fv['nome'].replace(' ','_')}_{mes.replace('/','')}.pdf",
-                                                   mime="application/pdf", key="dl_fv_r")
+                            _pdf_store("_pdf_rel_fv", gerar_ferias_pdf(func_fv, mes, folha_fv))
+                        _pdf_btn("_pdf_rel_fv",
+                                 f"ferias_{func_fv['nome'].replace(' ','_')}_{mes.replace('/','')}.pdf",
+                                 label="⬇️ Baixar")
                     else:
                         st.warning("Férias não calculadas para este mês.")
 
