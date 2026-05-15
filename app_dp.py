@@ -853,7 +853,7 @@ def gerar_contracheque_pdf(func: dict, mes: str = "04/2026") -> BytesIO:
         buffer.seek(0)
         return buffer
     except Exception as e:
-        logger.error(f"Erro gerar_contracheque_pdf: {e}")
+        logger.error(f"Erro gerar_contracheque_pdf: {e}\n{traceback.format_exc()}")
         return None
 
 
@@ -924,7 +924,7 @@ def gerar_folha_analitica_pdf(funcs: list, mes: str) -> BytesIO:
         buffer.seek(0)
         return buffer
     except Exception as e:
-        logger.error(f"Erro gerar_folha_analitica_pdf: {e}")
+        logger.error(f"Erro gerar_folha_analitica_pdf: {e}\n{traceback.format_exc()}")
         return None
 
 
@@ -996,7 +996,7 @@ def gerar_rescisao_pdf(func: dict, data_desligamento, motivo: str, valores: dict
         buffer.seek(0)
         return buffer
     except Exception as e:
-        logger.error(f"Erro gerar_rescisao_pdf: {e}")
+        logger.error(f"Erro gerar_rescisao_pdf: {e}\n{traceback.format_exc()}")
         return None
 
 
@@ -1037,7 +1037,7 @@ def gerar_decimo_pdf(func: dict, ano: int, tipo: str, valor: float, avos: int = 
         buffer.seek(0)
         return buffer
     except Exception as e:
-        logger.error(f"Erro gerar_decimo_pdf: {e}")
+        logger.error(f"Erro gerar_decimo_pdf: {e}\n{traceback.format_exc()}")
         return None
 
 
@@ -1082,7 +1082,7 @@ def gerar_ferias_pdf(func: dict, mes: str, valores_ferias: dict) -> BytesIO:
         buffer.seek(0)
         return buffer
     except Exception as e:
-        logger.error(f"Erro gerar_ferias_pdf: {e}")
+        logger.error(f"Erro gerar_ferias_pdf: {e}\n{traceback.format_exc()}")
         return None
 
 
@@ -1134,7 +1134,7 @@ def gerar_ficha_cadastro_pdf(func: dict) -> BytesIO:
         buffer.seek(0)
         return buffer
     except Exception as e:
-        logger.error(f"Erro gerar_ficha_cadastro_pdf: {e}")
+        logger.error(f"Erro gerar_ficha_cadastro_pdf: {e}\n{traceback.format_exc()}")
         return None
 
 
@@ -1195,7 +1195,7 @@ def gerar_ficha_financeira_anual_pdf(func: dict, ano: int) -> BytesIO:
         buffer.seek(0)
         return buffer
     except Exception as e:
-        logger.error(f"Erro gerar_ficha_financeira_anual_pdf: {e}")
+        logger.error(f"Erro gerar_ficha_financeira_anual_pdf: {e}\n{traceback.format_exc()}")
         return None
 
 
@@ -1248,7 +1248,7 @@ def gerar_resumo_folha_pdf(funcs: list, mes: str) -> BytesIO:
         buffer.seek(0)
         return buffer
     except Exception as e:
-        logger.error(f"Erro gerar_resumo_folha_pdf: {e}")
+        logger.error(f"Erro gerar_resumo_folha_pdf: {e}\n{traceback.format_exc()}")
         return None
 
 
@@ -1876,8 +1876,39 @@ else:
             
             st.divider()
             if st.button("📄 Gerar Manual em PDF"):
-                # Como não temos a função de PDF aqui, vamos apenas avisar
-                st.info("Função de exportação para PDF está sendo integrada nesta versão.")
+                try:
+                    buf_manual = BytesIO()
+                    doc_m = SimpleDocTemplate(buf_manual, pagesize=A4,
+                                              rightMargin=20*mm, leftMargin=20*mm,
+                                              topMargin=15*mm, bottomMargin=15*mm)
+                    styles_m = getSampleStyleSheet()
+                    h1_s = ParagraphStyle("H1m", parent=styles_m["Heading1"], fontSize=14, spaceAfter=4)
+                    h2_s = ParagraphStyle("H2m", parent=styles_m["Heading2"], fontSize=12, spaceAfter=3)
+                    body_s = ParagraphStyle("Bodym", parent=styles_m["Normal"], fontSize=9, spaceAfter=2)
+                    story_m = [Paragraph(f"<b>{SISTEMA_NOME} v{SISTEMA_VERSAO} — Manual de Utilização</b>",
+                                         ParagraphStyle("Tm", fontSize=16, alignment=TA_CENTER, spaceAfter=6))]
+                    for linha in conteudo.split("\n"):
+                        linha = linha.strip()
+                        if not linha:
+                            story_m.append(Spacer(1, 3*mm))
+                            continue
+                        # Escapar caracteres XML
+                        linha_esc = linha.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        if linha_esc.startswith("## "):
+                            story_m.append(Paragraph(linha_esc[3:], h2_s))
+                        elif linha_esc.startswith("# "):
+                            story_m.append(Paragraph(linha_esc[2:], h1_s))
+                        else:
+                            # Converter **negrito** simples
+                            linha_esc = linha_esc.replace("**", "<b>", 1).replace("**", "</b>", 1)
+                            story_m.append(Paragraph(linha_esc, body_s))
+                    doc_m.build(story_m)
+                    buf_manual.seek(0)
+                    _pdf_store("_pdf_manual", buf_manual)
+                except Exception as em:
+                    st.error(f"Erro ao gerar PDF do manual: {em}")
+            _pdf_btn("_pdf_manual", f"manual_{SISTEMA_NOME.replace(' ','_')}_v{SISTEMA_VERSAO}.pdf",
+                     label="⬇️ Baixar Manual PDF")
         except Exception as e:
             st.error(f"Erro ao carregar manual: {e}")
 
