@@ -7,8 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Run locally (development):**
 ```bash
 venv\Scripts\streamlit run app_dp.py
-# or with explicit port:
 venv\Scripts\streamlit run app_dp.py --server.port=8501
+```
+
+**Regenerate technical docs PDF:**
+```bash
+venv\Scripts\python gerar_docs_pdf.py
 ```
 
 **Run backup manually:**
@@ -23,14 +27,9 @@ venv\Scripts\pip install -r requirements.txt
 
 **Docker (production):**
 ```bash
-# Build and start full stack (Streamlit + Nginx + Certbot)
-docker compose up -d --build
-
-# View logs
-docker compose logs -f dpmaster
-
-# Rebuild after code changes
-docker compose up -d --build dpmaster
+docker compose up -d --build          # build and start full stack
+docker compose logs -f dpmaster        # follow logs
+docker compose up -d --build dpmaster  # rebuild after code changes
 ```
 
 **VPS first-time setup:**
@@ -42,25 +41,26 @@ bash deploy/deploy.sh              # builds and starts the stack
 
 ## Architecture
 
-The entire application lives in a single file: `app_dp.py` (~5000 lines). It is a Streamlit app with no external API calls or database — all persistence is file-based JSON in `data_dp/`.
+The entire application lives in `app_dp.py` (~4200 lines). It is a Streamlit app with no external API calls or database — all persistence is file-based JSON in `data_dp/` (git-ignored).
 
-### Sections of `app_dp.py` (in order)
+### Sections of `app_dp.py` (by line)
 
 | Lines | Section | Purpose |
 |-------|---------|---------|
-| 1–51 | Imports + `st.set_page_config` | Library imports with try/except fallbacks for optional deps (plotly, cryptography) |
-| 53–100 | CONFIGURAÇÕES / LOGGING | Constants (`DATA_DIR`, file paths), logging setup |
-| 103–229 | SEGURANÇA | Password hashing (SHA-256 + salt), session timeout (30 min), login lockout (5 attempts / 5 min) |
-| 231–252 | CRIPTOGRAFIA | Fernet symmetric encryption; key auto-generated at `data_dp/.master.key` on first run |
-| 255–530 | CARREGAR / SALVAR | JSON load/save functions for all entities; `usuarios` and `funcionarios` files are Fernet-encrypted; `tabelas` and `empresa` are plain JSON |
-| 374–436 | eSocial FILA | Queue of eSocial events with status lifecycle: `Pendente → Aguardando → Transmitido / Rejeitado / Cancelado` |
-| 438–530 | DOCUMENTOS | Per-employee document store under `data_dp/documentos/{func_id}/` with JSON metadata sidecar |
-| 532–666 | CÁLCULOS | Brazilian payroll: `calcular_inss()` (progressive table), `calcular_irrf()` (table with deduction per dependent), VT discount (6% cap), 13th-salary ávos, vacation period |
-| 668–1218 | GERAÇÃO DE PDF | ReportLab-based generators: contracheque, folha analítica, rescisão, décimo, férias, ficha cadastro, ficha financeira anual, resumo folha |
-| 1219–1360 | eSocial XML | Generates S-2200 (admissão), S-2299 (desligamento), S-1200 (folha), S-2230 (férias) XML files |
-| 1361–1455 | UI / CSS | `inject_global_css()` — all custom CSS injected via `st.markdown(..., unsafe_allow_html=True)` |
-| 1456–1556 | LOGIN / INICIALIZAÇÃO | `tela_login()`, `tem_permissao()`, default user seeding on first run |
-| 1557–end | MAIN | Navigation sidebar + all page renderers as `if menu == "..."` branches |
+| 1–45 | Imports | `try/except` fallbacks for optional deps: `plotly`, `cryptography` |
+| 46–108 | CONFIGURAÇÕES / LOGGING | Constants, file path vars, `log_acao()`, monthly log rotation |
+| 109–236 | SEGURANÇA | SHA-256+salt hashing, session timeout (30 min), login lockout (5 attempts / 5 min) |
+| 237–273 | CRIPTOGRAFIA | Fernet AES-256 encryption; key auto-generated at `data_dp/.master.key` |
+| 274–484 | CARREGAR / SALVAR | All JSON load/save functions; `usuarios` and `funcionarios` are Fernet-encrypted; multi-company helpers |
+| 485–567 | eSocial FILA | Event queue with lifecycle: `Pendente → Aguardando → Transmitido / Rejeitado / Cancelado` |
+| 568–664 | DOCUMENTOS | Per-employee document store under `data_dp/documentos/{func_id}/` with `_metadados.json` sidecar |
+| 665–858 | CÁLCULOS | Brazilian payroll: progressive INSS table, IRRF with dependent deduction, 6%-cap VT, 13th-salary ávos, vacation period |
+| 859–1445 | GERAÇÃO DE PDF | ReportLab generators: contracheque, folha analítica, rescisão, décimo, férias, ficha cadastro, ficha financeira anual, resumo folha |
+| 1446–1596 | eSocial XML | S-2200 admissão, S-2299 desligamento, S-1200 folha, S-2230 férias |
+| 1597–1692 | UI / CSS | `inject_global_css()` — all custom CSS via `st.markdown(unsafe_allow_html=True)` |
+| 1693–1854 | LOGIN / PERMISSÕES | `tela_login()` with company selector, `tem_permissao()`, `_set_flash()` / `_show_flash()` |
+| 1836–1854 | INICIALIZAÇÃO | Default user seeding on first run; `carregar_empresas()` bootstraps `empresas.json` |
+| 1855–end | MAIN | Sidebar navigation + all page renderers as `if menu == "..."` branches |
 
 ### Data layer
 
@@ -70,31 +70,62 @@ All data lives in `data_dp/` (excluded from git):
 |------|--------|-----------|
 | `funcionarios.json` | List of employee dicts | Yes (Fernet) |
 | `usuarios.json` | List of user dicts | Yes (Fernet) |
+| `empresas.json` | List of company dicts | No |
 | `tabelas.json` | INSS/IRRF rate tables | No |
-| `empresa.json` | Company config | No |
+| `empresa.json` | Legacy single-company config (kept for PDF fallback) | No |
 | `esocial_fila.json` | eSocial event queue | No |
-| `documentos/{id}/` | Employee files + metadata | No |
+| `documentos/{id}/` | Employee files + `_metadados.json` | No |
+| `logs/dpmaster_YYYYMM.log` | Monthly action log | No |
 | `.master.key` | Fernet key (binary) | — |
 
-**Funcionário dict key fields:**
-`id`, `nome`, `cpf`, `rg`, `data_nascimento`, `data_admissao`, `cargo`, `departamento`, `salario_base`, `dependentes`, `situacao` (`"Ativo"` / outros), `vt_mensal`, `folha_pagamento` (dict keyed by `"MM/YYYY"`), `pis`, `ctps`, `banco`, `agencia`, `conta`.
+**Key fields — Funcionário dict:**
+`id`, `nome`, `cpf`, `rg`, `data_nascimento`, `data_admissao`, `cargo`, `departamento`, `salario_base`, `num_dependentes`, `situacao` (`"Ativo"` / outros), `valor_vt_mensal`, `tem_plano_saude`, `valor_plano`, `empresa_id`, `folha_pagamento` (dict keyed `"MM/YYYY"`).
 
-**Folha entry** (`func["folha_pagamento"]["04/2026"]`): `salario_base`, `inss`, `irrf`, `vt_desc`, `outros_desc`, `outros_acr`, `liquido`.
+**Folha entry** (`func["folha_pagamento"]["04/2026"]`):
+`salario_base`, `inss`, `irrf`, `vt`, `plano_saude`, `itens_extras` (list of `{tipo, descricao, valor}`), `liquido`.
+
+### Multi-company architecture
+
+Each employee and user has an `empresa_id` field linking them to a record in `empresas.json`. The login screen shows a company selector; after login, `st.session_state.empresa_id` and `st.session_state.empresa_nome` are set.
+
+- **Admin global**: users stored *without* an `empresa_id` field (not `None` — the key is absent) can select any company at login and see all data without filtering.
+- **Read-only pages** (Dashboard, Relatórios, eSocial): use `get_funcionarios_empresa()` which returns an already-filtered list.
+- **Write pages** (Folha, 13º, Férias, Rescisão, Ponto): call `carregar_funcionarios()` (full list) for correct saves, then apply a local `_eid` filter just for the display `funcs` variable. This ensures list-item mutations propagate to the full list on save.
+- On first run, existing records without `empresa_id` are auto-migrated to `empresa_id=1`.
 
 ### Permission model
 
-Three roles, hierarchical — `tem_permissao(nivel)` returns `True` for all levels below:
+`tem_permissao(nivel)` — hierarchical, returns `True` for all levels at or below the user's role:
 
-- `admin` — full access including user management, logs, table config, company settings, backup
-- `coordenador` — employee CRUD, payroll, ponto, 13th, vacation, rescisão, eSocial, import
-- `funcionario` — read-only (own data + reports)
+| Role | Access |
+|------|--------|
+| `admin` | Everything including user management, logs, table config, company settings, backup |
+| `coordenador` | Employee CRUD, payroll, ponto, 13th, vacation, rescisão, eSocial, import |
+| `funcionario` | Read-only (own data + reports) |
 
 Default credentials on first run: `admin / 123456`, `coordenador / 123456`, `funcionario / 123456`.
 
-### Supporting modules
+### Flash message pattern
 
-- **`backup_dp.py`** — `criar_backup(motivo)` zips `data_dp/` into `data_dp_backups/backup_{motivo}_{ts}.zip`; keeps last 10 (configurable via `MAX_BACKUPS`). Auto-triggered before rescisão, exclusão, and restauração.
-- **`generators/generate_manual.py`** — holds the user manual as a Python string constant `MANUAL_UTILIZACAO`, imported directly into `app_dp.py` and rendered in the "Manual do Sistema" page.
+`st.success()` called immediately before `st.rerun()` is never rendered. Use the bridge pattern instead:
+
+```python
+_set_flash("success", "Operação realizada com sucesso!")
+st.rerun()
+# At the top of the page renderer, after st.header():
+_show_flash()
+```
+
+### Supporting files
+
+| File | Purpose |
+|------|---------|
+| `backup_dp.py` | `criar_backup(motivo)` zips `data_dp/` → `data_dp_backups/backup_{motivo}_{ts}.zip`; keeps last 10. Auto-triggered before rescisão, exclusão, restauração. |
+| `generators/generate_manual.py` | User manual as string constant `MANUAL_UTILIZACAO`; imported into `app_dp.py` and rendered on the "Manual do Sistema" page. |
+| `gerar_docs_pdf.py` | Extracts docstrings from `app_dp.py` via AST and generates `documentacao_tecnica.pdf`. Re-run after adding/editing docstrings. |
+| `.streamlit/config.toml` | Streamlit theme (primary `#2563eb`), XSRF enabled, upload limit 10 MB, headless mode. |
+| `assets/` | App icon and branding images referenced in UI. |
+| `docs/` | `changelog.md` and `manual_utilizacao.md` (static exports). |
 
 ### Production stack
 
@@ -103,8 +134,8 @@ Browser → Nginx (443/SSL, Let's Encrypt) → Streamlit :8501 (Docker internal)
                                          ↘ Certbot (auto-renew every 12h)
 ```
 
-Data is persisted via named Docker volumes (`dpmaster_data`, `dpmaster_backups`), not bind-mounts, so data survives container rebuilds.
+Named Docker volumes (`dpmaster_data`, `dpmaster_backups`) persist data across container rebuilds. The Dockerfile uses `python:3.11-slim` and runs as a non-root `appuser`.
 
-### Caching note
+### Caching
 
-Only `carregar_tabelas()` uses `@st.cache_data`. All other data loaders (`carregar_funcionarios`, `carregar_usuarios`, etc.) read from disk on every call — this is intentional to avoid stale data after writes.
+Only `carregar_tabelas()` uses `@st.cache_data`. All other loaders read from disk on every call — intentional to avoid stale data after writes.
