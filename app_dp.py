@@ -1659,6 +1659,25 @@ def tela_login():
         st.markdown(f'<p class="login-security">🔒 Conexão segura | Sessão expira em {SESSAO_TIMEOUT_MINUTOS} min</p>', unsafe_allow_html=True)
 
 
+def _set_flash(tipo: str, mensagem: str):
+    """Armazena mensagem para exibir após st.rerun()."""
+    st.session_state["_flash_tipo"] = tipo
+    st.session_state["_flash_msg"] = mensagem
+
+def _show_flash():
+    """Exibe e limpa a mensagem flash armazenada no session_state."""
+    if "_flash_msg" in st.session_state:
+        tipo = st.session_state.pop("_flash_tipo", "success")
+        msg  = st.session_state.pop("_flash_msg", "")
+        if tipo == "success":
+            st.success(msg, icon="✅")
+        elif tipo == "error":
+            st.error(msg, icon="❌")
+        elif tipo == "warning":
+            st.warning(msg, icon="⚠️")
+        else:
+            st.info(msg, icon="ℹ️")
+
 def tem_permissao(nivel: str) -> bool:
     if "usuario_logado" not in st.session_state:
         return False
@@ -2024,6 +2043,7 @@ else:
             st.error("Acesso negado.")
         else:
             st.header("👥 Gerenciar Usuários")
+            _show_flash()
             try:
                 usuarios = carregar_usuarios()
                 empresas_cad = carregar_empresas()
@@ -2062,8 +2082,7 @@ else:
                                     usuarios.append(novo)
                                     salvar_usuarios(usuarios)
                                     log_acao("USUARIO_NOVO", f"{username_u} ({perfil_u})")
-                                    st.success("Usuário cadastrado!")
-                                    st.info(msg_forca)
+                                    _set_flash("success", f"✅ Usuário **{username_u}** cadastrado com sucesso!")
                                     st.rerun()
                             else:
                                 st.warning("Preencha todos os campos.")
@@ -2082,7 +2101,7 @@ else:
                             usuarios = [x for x in usuarios if x["id"] != u["id"]]
                             salvar_usuarios(usuarios)
                             log_acao("USUARIO_EXCLUIDO", u['username'])
-                            st.success("Usuário excluído!")
+                            _set_flash("success", f"✅ Usuário **{u['username']}** excluído com sucesso!")
                             st.rerun()
             except Exception as e:
                 logger.error(f"Erro Gerenciar Usuários: {e}")
@@ -2094,6 +2113,7 @@ else:
             st.error("Você não tem permissão para acessar esta tela.")
         else:
             st.header("👤 Cadastro de Funcionários")
+            _show_flash()
             try:
                 funcs = get_funcionarios_empresa()
                 edit_id = st.session_state.get("edit_id", None)
@@ -2171,9 +2191,9 @@ else:
                                             f.update(dados_func)
                                             break
                                     log_acao("FUNC_ATUALIZADO", f"ID={edit_id} Nome={nome}")
-                                    st.success("Funcionário atualizado!")
                                     st.session_state.edit_id = None
                                     salvar_funcionarios(todos_funcs)
+                                    _set_flash("success", f"✅ Dados de **{nome}** atualizados com sucesso!")
                                 else:
                                     todos_funcs = carregar_funcionarios()
                                     novo_id = max([f.get("id", 0) for f in todos_funcs], default=0) + 1
@@ -2182,9 +2202,9 @@ else:
                                     todos_funcs.append(dados_func)
                                     salvar_funcionarios(todos_funcs)
                                     log_acao("FUNC_CADASTRADO", f"Nome={nome}")
-                                    st.success(f"Funcionário cadastrado! ID: {novo_id}")
                                     # Criar pasta de documentos
                                     pasta_documentos_func(novo_id)
+                                    _set_flash("success", f"✅ Funcionário **{nome}** cadastrado com sucesso! (ID: {novo_id})")
                                 st.rerun()
 
                     if edit_id and st.button("❌ Cancelar Edição"):
@@ -2201,10 +2221,12 @@ else:
                             st.session_state.edit_id = func["id"]
                             st.rerun()
                         if c4.button("🗑️", key=f"del_{func['id']}"):
-                            funcs = [f for f in funcs if f["id"] != func["id"]]
-                            salvar_funcionarios(funcs)
-                            log_acao("FUNC_EXCLUIDO", f"ID={func['id']}")
-                            st.success("Excluído!")
+                            nome_excluido = func['nome']
+                            todos_funcs_del = carregar_funcionarios()
+                            todos_funcs_del = [f for f in todos_funcs_del if f["id"] != func["id"]]
+                            salvar_funcionarios(todos_funcs_del)
+                            log_acao("FUNC_EXCLUIDO", f"ID={func['id']} Nome={nome_excluido}")
+                            _set_flash("success", f"✅ Funcionário **{nome_excluido}** excluído com sucesso!")
                             st.rerun()
 
 
@@ -3673,6 +3695,7 @@ else:
             st.error("Acesso negado.")
         else:
             st.header("🏢 Cadastro de Empresas")
+            _show_flash()
             try:
                 empresas = carregar_empresas()
 
@@ -3708,7 +3731,7 @@ else:
                                 })
                                 salvar_empresas(empresas)
                                 log_acao("EMPRESA_CADASTRADA", f"{ne_nome} | CNPJ: {ne_cnpj}")
-                                st.success(f"Empresa '{ne_nome}' cadastrada com ID {novo_id_emp}!")
+                                _set_flash("success", f"✅ Empresa **{ne_nome}** cadastrada com sucesso! (ID: {novo_id_emp})")
                                 st.rerun()
 
                 st.subheader("Empresas Cadastradas")
@@ -3745,7 +3768,7 @@ else:
                                             break
                                     salvar_empresas(empresas)
                                     log_acao("EMPRESA_ATUALIZADA", f"ID={emp_item['id']} {e_nome}")
-                                    st.success("Empresa atualizada!")
+                                    _set_flash("success", f"✅ Empresa **{e_nome}** atualizada com sucesso!")
                                     st.rerun()
                             with col_del:
                                 if st.form_submit_button("🗑️ Excluir"):
@@ -3758,7 +3781,7 @@ else:
                                         empresas = [e for e in empresas if e["id"] != emp_item["id"]]
                                         salvar_empresas(empresas)
                                         log_acao("EMPRESA_EXCLUIDA", f"ID={emp_item['id']}")
-                                        st.success("Empresa excluída!")
+                                        _set_flash("success", f"✅ Empresa **{emp_item['nome']}** excluída com sucesso!")
                                         st.rerun()
             except Exception as e:
                 logger.error(f"Erro Cadastro Empresas: {e}")
@@ -3770,6 +3793,7 @@ else:
             st.error("Acesso negado.")
         else:
             st.header("🏢 Configurações da Empresa")
+            _show_flash()
             # Carrega empresa da sessão atual de empresas.json
             empresas_cfg = carregar_empresas()
             eid_cfg = st.session_state.get("empresa_id")
@@ -3820,7 +3844,7 @@ else:
                                           "regime": emp_regime, "aliquota_patronal": aliq_p,
                                           "aliquota_rat": aliq_r, "aliquota_terceiros": aliq_t})
                     log_acao("CONFIG_EMPRESA", f"Regime: {emp_regime}")
-                    st.success("Configurações salvas com sucesso!")
+                    _set_flash("success", "✅ Configurações da empresa salvas com sucesso!")
                     st.rerun()
 
     # ====================== LOGS ======================
@@ -3869,6 +3893,7 @@ else:
             st.stop()
         
         st.header("⚙️ Configuração de Tabelas (INSS / IRRF)")
+        _show_flash()
         st.info("⚠️ Alterações nestas tabelas afetam todos os cálculos de folha de pagamento, férias e rescisão.")
         
         try:
@@ -3912,9 +3937,9 @@ else:
                     }
                 }
                 if salvar_tabelas(novas_tabelas):
-                    st.success("✅ Tabelas atualizadas com sucesso!")
-                    st.cache_data.clear() # Limpar cache para forçar recarregamento
+                    st.cache_data.clear()
                     log_acao("CONFIG_TABELAS", "Tabelas de INSS/IRRF atualizadas")
+                    _set_flash("success", "✅ Tabelas de INSS/IRRF atualizadas com sucesso!")
                     st.rerun()
                 else:
                     st.error("❌ Erro ao salvar as tabelas.")
