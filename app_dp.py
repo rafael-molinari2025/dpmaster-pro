@@ -87,6 +87,11 @@ logger = logging.getLogger("DPMasterPro")
 
 
 def log_acao(acao: str, detalhe: str = "", nivel: str = "info"):
+    """Registra uma ação do usuário no arquivo de log mensal.
+
+    Prefixa automaticamente o nome do usuário logado na sessão atual.
+    Níveis aceitos: 'info' (padrão), 'warning', 'error'.
+    """
     usuario = ""
     if "usuario_logado" in st.session_state:
         usuario = st.session_state.usuario_logado.get("username", "?")
@@ -233,6 +238,11 @@ def validar_forca_senha(senha: str) -> tuple:
 KEY_FILE = os.path.join(DATA_DIR, ".master.key")
 
 def obter_chave_mestra():
+    """Carrega a chave Fernet de data_dp/.master.key, gerando-a na primeira execução.
+
+    Se a biblioteca cryptography não estiver disponível, retorna bytes vazios
+    e o sistema opera sem criptografia (modo degradado).
+    """
     if not CRYPTO_AVAILABLE: return b""
     if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
@@ -243,11 +253,19 @@ def obter_chave_mestra():
         return kf.read()
 
 def criptografar_dados(dados_json: str) -> bytes:
+    """Criptografa uma string JSON com AES-256 via Fernet.
+
+    Sem criptografia disponível, retorna os dados em UTF-8 sem proteção.
+    """
     if not CRYPTO_AVAILABLE: return dados_json.encode('utf-8')
     fernet = Fernet(obter_chave_mestra())
     return fernet.encrypt(dados_json.encode('utf-8'))
 
 def descriptografar_dados(dados_cripto: bytes) -> str:
+    """Descriptografa bytes Fernet para string JSON.
+
+    Sem criptografia disponível, faz decodificação UTF-8 direta.
+    """
     if not CRYPTO_AVAILABLE: return dados_cripto.decode('utf-8')
     fernet = Fernet(obter_chave_mestra())
     return fernet.decrypt(dados_cripto).decode('utf-8')
@@ -256,6 +274,11 @@ def descriptografar_dados(dados_cripto: bytes) -> str:
 # ====================== CARREGAR / SALVAR ======================
 @st.cache_data
 def carregar_tabelas():
+    """Carrega as tabelas de INSS e IRRF do arquivo tabelas.json.
+
+    Resultados são cacheados pelo Streamlit; use st.cache_data.clear() após salvar.
+    Retorna tabelas com valores padrão de 2026 se o arquivo não existir.
+    """
     try:
         if os.path.exists(TABELAS_FILE):
             with open(TABELAS_FILE, "r", encoding="utf-8") as f:
@@ -286,6 +309,7 @@ def carregar_tabelas():
         return {}
 
 def salvar_tabelas(dados):
+    """Persiste o dicionário de tabelas INSS/IRRF em tabelas.json. Retorna True se salvo."""
     try:
         with open(TABELAS_FILE, "w", encoding="utf-8") as f:
             json.dump(dados, f, ensure_ascii=False, indent=4)
@@ -295,6 +319,7 @@ def salvar_tabelas(dados):
         return False
 
 def carregar_dados_empresa():
+    """Lê empresa.json (formato legado, uma única empresa). Mantido para compatibilidade."""
     try:
         if os.path.exists(EMPRESA_FILE):
             with open(EMPRESA_FILE, "r", encoding="utf-8") as f:
@@ -309,6 +334,7 @@ def carregar_dados_empresa():
         return {}
 
 def salvar_dados_empresa(dados):
+    """Persiste dados em empresa.json (formato legado). Mantido para compatibilidade com PDFs antigos."""
     try:
         with open(EMPRESA_FILE, "w", encoding="utf-8") as f:
             json.dump(dados, f, ensure_ascii=False, indent=4)
@@ -318,6 +344,11 @@ def salvar_dados_empresa(dados):
         return False
 
 def carregar_empresas():
+    """Carrega a lista de empresas de empresas.json.
+
+    Na primeira execução migra automaticamente empresa.json (formato legado)
+    para o novo formato multi-empresa com id=1.
+    """
     try:
         if os.path.exists(EMPRESAS_FILE):
             with open(EMPRESAS_FILE, "r", encoding="utf-8") as f:
@@ -341,6 +372,7 @@ def carregar_empresas():
         return []
 
 def salvar_empresas(empresas):
+    """Persiste a lista completa de empresas em empresas.json. Retorna True se salvo."""
     try:
         with open(EMPRESAS_FILE, "w", encoding="utf-8") as f:
             json.dump(empresas, f, ensure_ascii=False, indent=4)
@@ -363,15 +395,19 @@ def get_dados_empresa_sessao():
         return carregar_dados_empresa()
 
 def carregar_usuarios():
+    """Lê e descriptografa usuarios.json (Fernet AES-256).
+
+    Se o arquivo estiver em texto puro (instalação anterior), migra automaticamente
+    para o formato criptografado e salva. Retorna lista vazia em caso de erro.
+    """
     if not os.path.exists(USUARIOS_FILE):
         return []
     try:
         with open(USUARIOS_FILE, "rb") as f:
             conteudo = f.read()
             try:
-                # Tentar ler como JSON plano (migração)
                 dados = json.loads(conteudo.decode('utf-8'))
-                salvar_usuarios(dados) # Salvar criptografado
+                salvar_usuarios(dados)
                 return dados
             except:
                 return json.loads(descriptografar_dados(conteudo))
@@ -380,6 +416,7 @@ def carregar_usuarios():
         return []
 
 def salvar_usuarios(usuarios):
+    """Serializa e criptografa a lista de usuários em usuarios.json. Retorna True se salvo."""
     try:
         dados_json = json.dumps(usuarios, indent=4, ensure_ascii=False)
         with open(USUARIOS_FILE, "wb") as f:
@@ -390,13 +427,18 @@ def salvar_usuarios(usuarios):
         return False
 
 def carregar_funcionarios():
+    """Lê e descriptografa funcionarios.json (Fernet AES-256).
+
+    Se o arquivo estiver em texto puro (instalação anterior), migra automaticamente
+    para o formato criptografado e salva. Retorna lista vazia em caso de erro.
+    Nota: não filtra por empresa — use get_funcionarios_empresa() nas páginas de UI.
+    """
     if not os.path.exists(FUNCIONARIOS_FILE):
         return []
     try:
         with open(FUNCIONARIOS_FILE, "rb") as f:
             conteudo = f.read()
             try:
-                # Tentar ler como JSON plano (migração)
                 dados = json.loads(conteudo.decode('utf-8'))
                 salvar_funcionarios(dados)
                 return dados
@@ -407,6 +449,7 @@ def carregar_funcionarios():
         return []
 
 def salvar_funcionarios(funcs):
+    """Serializa lista completa de funcionários e grava criptografada em FUNCIONARIOS_FILE."""
     try:
         dados_json = json.dumps(funcs, indent=4, ensure_ascii=False)
         with open(FUNCIONARIOS_FILE, "wb") as f:
@@ -417,8 +460,12 @@ def salvar_funcionarios(funcs):
         return False
 
 def get_funcionarios_empresa(empresa_id=None):
-    """Retorna funcionários da empresa da sessão ou de empresa_id específico.
-    admin sem empresa_id no session_state vê todos os funcionários."""
+    """Retorna funcionários filtrados pela empresa da sessão ativa (ou empresa_id explícito).
+
+    Executa migração automática de registros sem empresa_id (atribui id=1).
+    Admin Global (session empresa_id = None) recebe todos os funcionários sem filtro.
+    Use esta função em todas as páginas de UI; use carregar_funcionarios() apenas ao salvar.
+    """
     if empresa_id is None:
         empresa_id = st.session_state.get("empresa_id")
     funcs = carregar_funcionarios()
@@ -437,6 +484,7 @@ def get_funcionarios_empresa(empresa_id=None):
 
 # ====================== eSocial FILA ======================
 def carregar_fila_esocial() -> list:
+    """Carrega a fila de eventos eSocial de esocial_fila.json. Retorna lista vazia se inexistente."""
     try:
         if os.path.exists(ESOCIAL_FILA_FILE):
             with open(ESOCIAL_FILA_FILE, "r", encoding="utf-8") as f:
@@ -448,6 +496,7 @@ def carregar_fila_esocial() -> list:
 
 
 def salvar_fila_esocial(fila: list):
+    """Persiste a lista completa de eventos eSocial em esocial_fila.json."""
     try:
         with open(ESOCIAL_FILA_FILE, "w", encoding="utf-8") as f:
             json.dump(fila, f, ensure_ascii=False, indent=4)
@@ -458,7 +507,20 @@ def salvar_fila_esocial(fila: list):
 def adicionar_evento_fila(tipo: str, grupo: str, descricao: str,
                           func_nome: str = "", func_id: int = 0,
                           arquivo_xml: str = "", dados_extras: dict = None):
-    """Adiciona um evento à fila eSocial."""
+    """Cria e enfileira um evento eSocial com status inicial 'Pendente'.
+
+    Args:
+        tipo: Código do evento (ex: 'S-2200', 'S-1200').
+        grupo: 'Periódico' ou 'Não Periódico'.
+        descricao: Texto descritivo exibido na fila.
+        func_nome: Nome do funcionário relacionado (opcional).
+        func_id: ID do funcionário relacionado (opcional).
+        arquivo_xml: Caminho do XML gerado, se houver.
+        dados_extras: Dicionário com informações adicionais do evento.
+
+    Returns:
+        int: ID do evento criado na fila.
+    """
     fila = carregar_fila_esocial()
     evento = {
         "id": max([e.get("id", 0) for e in fila], default=0) + 1,
@@ -482,6 +544,10 @@ def adicionar_evento_fila(tipo: str, grupo: str, descricao: str,
 
 
 def atualizar_status_evento(evento_id: int, novo_status: str, obs: str = "", protocolo: str = ""):
+    """Atualiza o status de um evento na fila eSocial e registra no histórico do evento.
+
+    Ciclo de status: Pendente → Aguardando → Transmitido | Rejeitado | Cancelado.
+    """
     fila = carregar_fila_esocial()
     for ev in fila:
         if ev["id"] == evento_id:
@@ -501,6 +567,7 @@ def atualizar_status_evento(evento_id: int, novo_status: str, obs: str = "", pro
 
 # ====================== DOCUMENTOS DE FUNCIONÁRIOS ======================
 def pasta_documentos_func(func_id: int) -> str:
+    """Retorna (e cria se necessário) o caminho da pasta de documentos do funcionário."""
     pasta = os.path.join(DOCS_DIR, str(func_id))
     os.makedirs(pasta, exist_ok=True)
     return pasta
@@ -547,6 +614,7 @@ def salvar_documento_func(func_id: int, arquivo_nome: str, conteudo: bytes,
 
 
 def carregar_metadados_docs(func_id: int) -> list:
+    """Retorna lista de metadados dos documentos arquivados de um funcionário."""
     pasta = pasta_documentos_func(func_id)
     meta_file = os.path.join(pasta, "_metadados.json")
     if os.path.exists(meta_file):
@@ -556,6 +624,7 @@ def carregar_metadados_docs(func_id: int) -> list:
 
 
 def excluir_documento(func_id: int, doc_id: str):
+    """Remove arquivo físico e entrada de metadados de um documento arquivado."""
     pasta = pasta_documentos_func(func_id)
     meta_file = os.path.join(pasta, "_metadados.json")
     if not os.path.exists(meta_file):
@@ -595,6 +664,11 @@ EXTENSOES_PERMITIDAS = [".pdf", ".jpg", ".jpeg", ".png"]
 
 # ====================== CÁLCULOS ======================
 def calcular_inss(salario: float) -> float:
+    """Calcula a contribuição do INSS pelo método progressivo (tabela 2026).
+
+    Aplica alíquotas por faixa salarial sobre a parcela correspondente; retorna
+    o desconto acumulado arredondado em dois decimais.
+    """
     try:
         if salario <= 0:
             return 0.0
@@ -626,6 +700,11 @@ def calcular_inss(salario: float) -> float:
 
 
 def calcular_irrf(base: float, dependentes: int = 0) -> float:
+    """Calcula o IRRF mensal sobre a base tributável após dedução de dependentes.
+
+    Subtrai R$ 189,59 por dependente da base antes de aplicar a tabela progressiva.
+    Retorna 0,00 na faixa de isenção.
+    """
     try:
         if base <= 0:
             return 0.0
@@ -651,6 +730,7 @@ def calcular_irrf(base: float, dependentes: int = 0) -> float:
 
 
 def calcular_vt(salario: float, vt_mensal: float) -> float:
+    """Calcula o desconto de vale-transporte: mínimo entre 6% do salário e o VT mensal."""
     try:
         if vt_mensal <= 0:
             return 0.0
@@ -661,6 +741,11 @@ def calcular_vt(salario: float, vt_mensal: float) -> float:
 
 
 def calcular_avos(data_admissao, ano: int = 2026) -> int:
+    """Conta os avos trabalhados no ano para cálculo do 13º salário.
+
+    Um avo é contado quando o funcionário trabalha 15 ou mais dias no mês
+    (conforme art. 1º da Lei nº 4.090/1962).
+    """
     try:
         if not data_admissao:
             return 12
@@ -684,6 +769,10 @@ def calcular_avos(data_admissao, ano: int = 2026) -> int:
 
 
 def calcular_periodo_aquisitivo(data_admissao, mes_pagamento: str = "04/2026"):
+    """Determina o período aquisitivo de férias vigente na data de referência.
+
+    Retorna (meses_trabalhados, ano_inicio_periodo, descricao_status).
+    """
     try:
         if not data_admissao:
             return 12, 2026, "Sem data de admissão"
@@ -714,6 +803,7 @@ def calcular_periodo_aquisitivo(data_admissao, mes_pagamento: str = "04/2026"):
 
 
 def fmt_brl(valor: float) -> str:
+    """Formata float como moeda brasileira, ex.: 1234.5 → 'R$ 1.234,50'."""
     try:
         return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception:
@@ -721,6 +811,7 @@ def fmt_brl(valor: float) -> str:
 
 
 def fmt_tamanho(bytes_val: int) -> str:
+    """Converte bytes para string legível (B / KB / MB)."""
     if bytes_val < 1024:
         return f"{bytes_val} B"
     elif bytes_val < 1024 * 1024:
@@ -767,6 +858,7 @@ def _xml_btn(sk: str, filename: str, label: str = "⬇️ Baixar XML") -> None:
 
 # ====================== GERAÇÃO DE PDF (ReportLab) ======================
 def _estilos():
+    """Retorna tupla (titulo, subtitulo, secao, normal) de ParagraphStyles ReportLab."""
     styles = getSampleStyleSheet()
     titulo = ParagraphStyle("TituloDoc", parent=styles["Title"],
                             fontSize=14, spaceAfter=4, alignment=TA_CENTER)
@@ -779,6 +871,10 @@ def _estilos():
 
 
 def _header_empresa(titulo_doc: str, referencia: str = ""):
+    """Gera bloco de cabeçalho de documento PDF com nome/CNPJ da empresa e título.
+
+    Lê os dados da empresa da sessão via get_dados_empresa_sessao().
+    """
     titulo_s, subtitulo_s, secao_s, normal_s = _estilos()
     _emp = get_dados_empresa_sessao()
     _nome_emp = _emp.get("nome", EMPRESA_NOME)
@@ -799,6 +895,10 @@ def _header_empresa(titulo_doc: str, referencia: str = ""):
 
 
 def _tabela_itens(dados: list, col_widths=None):
+    """Constrói Table ReportLab de duas colunas (label negrito | valor alinhado à direita).
+
+    dados: lista de pares [label, valor_str].
+    """
     w = col_widths or [110 * mm, 60 * mm]
     table_data = [[Paragraph(f"<b>{r[0]}</b>", getSampleStyleSheet()["Normal"]),
                    Paragraph(r[1], ParagraphStyle("Val", alignment=TA_RIGHT,
@@ -818,6 +918,11 @@ def _tabela_itens(dados: list, col_widths=None):
 
 
 def gerar_contracheque_pdf(func: dict, mes: str = "04/2026") -> BytesIO:
+    """Gera PDF de contracheque/recibo de pagamento para o funcionário no mês informado.
+
+    Usa dados já calculados em folha_pagamento[mes], com fallback para cálculo em tempo real.
+    Retorna BytesIO pronto para download ou None em caso de erro.
+    """
     try:
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -926,6 +1031,10 @@ def gerar_contracheque_pdf(func: dict, mes: str = "04/2026") -> BytesIO:
 
 
 def gerar_folha_analitica_pdf(funcs: list, mes: str) -> BytesIO:
+    """Gera PDF da folha analítica com uma linha por funcionário e linha de totais.
+
+    Retorna BytesIO ou None em caso de erro.
+    """
     try:
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -997,6 +1106,12 @@ def gerar_folha_analitica_pdf(funcs: list, mes: str) -> BytesIO:
 
 
 def gerar_rescisao_pdf(func: dict, data_desligamento, motivo: str, valores: dict) -> BytesIO:
+    """Gera PDF do Termo de Rescisão do Contrato de Trabalho (TRCT).
+
+    valores: dict com chaves saldo_salario, ferias_vencidas, ferias_proporcionais,
+    decimo_proporcional, aviso_previo, fgts_deposito, fgts_multa, inss_rescisao,
+    irrf_rescisao, liquido.
+    """
     try:
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -1069,6 +1184,10 @@ def gerar_rescisao_pdf(func: dict, data_desligamento, motivo: str, valores: dict
 
 
 def gerar_decimo_pdf(func: dict, ano: int, tipo: str, valor: float, avos: int = 12) -> BytesIO:
+    """Gera PDF do recibo de 13º salário.
+
+    tipo: 'Adiantamento' ou 'Final'. Na parcela final aplica INSS e IRRF.
+    """
     try:
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -1110,6 +1229,7 @@ def gerar_decimo_pdf(func: dict, ano: int, tipo: str, valor: float, avos: int = 
 
 
 def gerar_ferias_pdf(func: dict, mes: str, valores_ferias: dict) -> BytesIO:
+    """Gera PDF do recibo de férias com cálculo detalhado (base, 1/3, abono, INSS, IRRF)."""
     try:
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -1155,6 +1275,7 @@ def gerar_ferias_pdf(func: dict, mes: str, valores_ferias: dict) -> BytesIO:
 
 
 def gerar_ficha_cadastro_pdf(func: dict) -> BytesIO:
+    """Gera PDF da ficha cadastral do funcionário com dados pessoais, profissionais, benefícios e documentos."""
     try:
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -1207,6 +1328,7 @@ def gerar_ficha_cadastro_pdf(func: dict) -> BytesIO:
 
 
 def gerar_ficha_financeira_anual_pdf(func: dict, ano: int) -> BytesIO:
+    """Gera PDF da ficha financeira anual com os 12 meses de competência e totalizadores."""
     try:
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -1268,6 +1390,7 @@ def gerar_ficha_financeira_anual_pdf(func: dict, ano: int) -> BytesIO:
 
 
 def gerar_resumo_folha_pdf(funcs: list, mes: str) -> BytesIO:
+    """Gera PDF do resumo gerencial da folha: totalizadores, encargos patronais e custo total."""
     try:
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4,
@@ -1322,6 +1445,11 @@ def gerar_resumo_folha_pdf(funcs: list, mes: str) -> BytesIO:
 
 # ====================== eSocial XML ======================
 def gerar_xml_admissao(func: dict):
+    """Gera arquivo XML do evento S-2200 (Admissão) do eSocial.
+
+    Retorna (caminho_arquivo, nome_arquivo, xml_str) ou (None, None, None) em caso de erro.
+    Ambiente padrão: 2 (homologação).
+    """
     try:
         root = ET.Element("eSocial", xmlns="http://www.esocial.gov.br/schema/evt/evtAdmissao/v03_01_00_00")
         evt = ET.SubElement(root, "evtAdmissao", Id=f"ID1{datetime.now().strftime('%Y%m%d%H%M%S')}")
@@ -1356,6 +1484,10 @@ def gerar_xml_admissao(func: dict):
 
 
 def gerar_xml_desligamento(func: dict, data_desligamento, motivo: str):
+    """Gera arquivo XML do evento S-2299 (Desligamento) do eSocial.
+
+    Retorna (caminho_arquivo, nome_arquivo, xml_str) ou (None, None, None) em caso de erro.
+    """
     try:
         root = ET.Element("eSocial", xmlns="http://www.esocial.gov.br/schema/evt/evtDeslig/v03_01_00_00")
         evt = ET.SubElement(root, "evtDeslig", Id=f"ID1{datetime.now().strftime('%Y%m%d%H%M%S')}")
@@ -1464,6 +1596,7 @@ def gerar_xml_ferias(func: dict, mes: str, valores_ferias: dict):
 
 # ====================== UI / CSS ======================
 def inject_global_css():
+    """Injeta CSS global via st.markdown para tipografia, cards, sidebar escura e tabelas."""
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700&display=swap');
@@ -1559,6 +1692,11 @@ def inject_global_css():
 
 # ====================== LOGIN / PERMISSÕES ======================
 def tela_login():
+    """Exibe o formulário de login com seletor de empresa.
+
+    Valida empresa, usuário, senha e bloqueio por tentativas. Em caso de sucesso seta
+    st.session_state.usuario_logado, empresa_id, empresa_nome e sessao_inicio.
+    """
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Source+Sans+3:wght@300;400;600&display=swap');
@@ -1679,6 +1817,10 @@ def _show_flash():
             st.info(msg, icon="ℹ️")
 
 def tem_permissao(nivel: str) -> bool:
+    """Verifica se o usuário logado possui o nível de permissão exigido.
+
+    Hierarquia: admin > coordenador > funcionario (visualizar).
+    """
     if "usuario_logado" not in st.session_state:
         return False
     perfil = st.session_state.usuario_logado.get("perfil", "")
