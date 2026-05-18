@@ -68,6 +68,7 @@ LOG_DIR           = os.path.join(DATA_DIR, "logs")
 DOCS_DIR          = os.path.join(DATA_DIR, "documentos")  # ← novo
 TABELAS_FILE      = os.path.join(DATA_DIR, "tabelas.json")
 EMPRESA_FILE      = os.path.join(DATA_DIR, "empresa.json")
+EMPRESAS_FILE     = os.path.join(DATA_DIR, "empresas.json")
 
 for d in [DATA_DIR, ESOCIAL_DIR, LOG_DIR, DOCS_DIR]:
     os.makedirs(d, exist_ok=True)
@@ -316,6 +317,51 @@ def salvar_dados_empresa(dados):
         logger.error(f"Erro salvar_dados_empresa: {e}")
         return False
 
+def carregar_empresas():
+    try:
+        if os.path.exists(EMPRESAS_FILE):
+            with open(EMPRESAS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        # Migração: importar empresa.json existente como empresa padrão
+        emp = carregar_dados_empresa()
+        emp_padrao = {
+            "id": 1, "ativa": True,
+            "nome": emp.get("nome", EMPRESA_NOME),
+            "cnpj": emp.get("cnpj", EMPRESA_CNPJ),
+            "endereco": emp.get("endereco", EMPRESA_ENDERECO),
+            "regime": emp.get("regime", "Simples Nacional"),
+            "aliquota_patronal": emp.get("aliquota_patronal", 0.0),
+            "aliquota_rat": emp.get("aliquota_rat", 0.0),
+            "aliquota_terceiros": emp.get("aliquota_terceiros", 0.0),
+        }
+        salvar_empresas([emp_padrao])
+        return [emp_padrao]
+    except Exception as e:
+        logger.error(f"Erro ao carregar empresas: {e}")
+        return []
+
+def salvar_empresas(empresas):
+    try:
+        with open(EMPRESAS_FILE, "w", encoding="utf-8") as f:
+            json.dump(empresas, f, ensure_ascii=False, indent=4)
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao salvar empresas: {e}")
+        return False
+
+def get_dados_empresa_sessao():
+    """Retorna dados da empresa da sessão atual (ou empresa padrão)."""
+    try:
+        eid = st.session_state.get("empresa_id")
+        empresas = carregar_empresas()
+        if eid:
+            emp = next((e for e in empresas if e["id"] == eid), None)
+            if emp:
+                return emp
+        return empresas[0] if empresas else carregar_dados_empresa()
+    except Exception:
+        return carregar_dados_empresa()
+
 def carregar_usuarios():
     if not os.path.exists(USUARIOS_FILE):
         return []
@@ -369,6 +415,24 @@ def salvar_funcionarios(funcs):
     except Exception as e:
         logger.error(f"Erro ao salvar funcionários: {e}")
         return False
+
+def get_funcionarios_empresa(empresa_id=None):
+    """Retorna funcionários da empresa da sessão ou de empresa_id específico.
+    admin sem empresa_id no session_state vê todos os funcionários."""
+    if empresa_id is None:
+        empresa_id = st.session_state.get("empresa_id")
+    funcs = carregar_funcionarios()
+    # Migração: funcionários sem empresa_id recebem empresa_id=1
+    migrou = False
+    for f in funcs:
+        if "empresa_id" not in f:
+            f["empresa_id"] = 1
+            migrou = True
+    if migrou:
+        salvar_funcionarios(funcs)
+    if empresa_id is None:
+        return funcs  # super admin: vê todos
+    return [f for f in funcs if f.get("empresa_id") == empresa_id]
 
 
 # ====================== eSocial FILA ======================
@@ -716,9 +780,13 @@ def _estilos():
 
 def _header_empresa(titulo_doc: str, referencia: str = ""):
     titulo_s, subtitulo_s, secao_s, normal_s = _estilos()
+    _emp = get_dados_empresa_sessao()
+    _nome_emp = _emp.get("nome", EMPRESA_NOME)
+    _cnpj_emp = _emp.get("cnpj", EMPRESA_CNPJ)
+    _end_emp  = _emp.get("endereco", EMPRESA_ENDERECO)
     items = [
-        Paragraph(EMPRESA_NOME, titulo_s),
-        Paragraph(f"CNPJ: {EMPRESA_CNPJ}  |  {EMPRESA_ENDERECO}", subtitulo_s),
+        Paragraph(_nome_emp, titulo_s),
+        Paragraph(f"CNPJ: {_cnpj_emp}  |  {_end_emp}", subtitulo_s),
         HRFlowable(width="100%", thickness=1, color=colors.HexColor("#2c3e50")),
         Spacer(1, 4 * mm),
         Paragraph(titulo_doc, ParagraphStyle("TDoc", fontSize=13, fontName="Helvetica-Bold",
@@ -1208,12 +1276,12 @@ def gerar_resumo_folha_pdf(funcs: list, mes: str) -> BytesIO:
         titulo_s, subtitulo_s, secao_s, normal_s = _estilos()
         story = _header_empresa("RESUMO GERAL DA FOLHA DE PAGAMENTO", mes)
         
-        empresa = carregar_dados_empresa()
+        empresa = get_dados_empresa_sessao()
         regime = empresa.get("regime", "Simples Nacional")
         aliq_patronal = empresa.get("aliquota_patronal", 20.0) / 100
         aliq_rat = empresa.get("aliquota_rat", 2.0) / 100
         aliq_terc = empresa.get("aliquota_terceiros", 5.8) / 100
-        
+
         total_b = total_inss = total_irrf = total_vt = total_pl = total_lq = 0.0
         for func in funcs:
             folha = func.get("folha_pagamento", {}).get(mes, {})
@@ -1508,12 +1576,30 @@ def tela_login():
     with col:
         st.markdown(f'<p class="login-brand">🏢 {SISTEMA_NOME}</p>', unsafe_allow_html=True)
         st.markdown(f'<p class="login-slogan">{SISTEMA_SLOGAN}</p>', unsafe_allow_html=True)
+
+        # Carregar empresas ativas para o seletor
+        empresas_lista = [e for e in carregar_empresas() if e.get("ativa", True)]
+        opcoes_empresa = {e["nome"]: e["id"] for e in empresas_lista}
+
         with st.form("login_form"):
+            if opcoes_empresa:
+                empresa_sel_nome = st.selectbox(
+                    "🏢 Empresa", list(opcoes_empresa.keys()),
+                    help="Selecione a empresa à qual você pertence"
+                )
+                empresa_sel_id = opcoes_empresa[empresa_sel_nome]
+            else:
+                st.warning("Nenhuma empresa cadastrada. Contate o administrador.")
+                empresa_sel_id = None
+                empresa_sel_nome = ""
+
             username = st.text_input("Usuário", placeholder="Digite seu usuário")
             senha = st.text_input("Senha", type="password", placeholder="Digite sua senha")
             if st.form_submit_button("Entrar →", type="primary", use_container_width=True):
                 if not username or not senha:
                     st.error("Preencha usuário e senha.")
+                elif empresa_sel_id is None:
+                    st.error("Selecione uma empresa para continuar.")
                 else:
                     # Verificar bloqueio por excesso de tentativas
                     bloqueado, tempo_rest = verificar_bloqueio_login(username.lower())
@@ -1526,29 +1612,40 @@ def tela_login():
                         usuarios = carregar_usuarios()
                         # Migrar senhas em texto puro (primeira execução após atualização)
                         migrar_senhas_texto_puro(usuarios)
-                        
+
                         login_ok = False
                         for u in usuarios:
                             if u.get("username", "").lower() == username.lower():
+                                # Admin global (sem empresa_id) pode entrar em qualquer empresa
+                                u_empresa_id = u.get("empresa_id")
+                                if u_empresa_id is not None and u_empresa_id != empresa_sel_id:
+                                    # Usuário pertence a outra empresa
+                                    break
                                 # Verificar senha com hash
                                 if "salt" in u:
                                     if verificar_senha(senha, u["senha"], u["salt"]):
                                         login_ok = True
                                 else:
-                                    # Fallback para texto puro (não deveria ocorrer após migração)
                                     if u.get("senha") == senha:
                                         login_ok = True
-                                
+
                                 if login_ok:
                                     st.session_state.usuario_logado = u
+                                    # empresa_id na sessão: usa a empresa selecionada,
+                                    # mas admin global (sem empresa_id) fica sem filtro
+                                    if u_empresa_id is not None:
+                                        st.session_state.empresa_id = u_empresa_id
+                                    else:
+                                        st.session_state.empresa_id = empresa_sel_id
+                                    st.session_state.empresa_nome = empresa_sel_nome
                                     st.session_state.sessao_inicio = datetime.now()
                                     st.session_state.sessao_ultimo_acesso = datetime.now()
                                     registrar_tentativa_login(username.lower(), True)
-                                    log_acao("LOGIN", f"Login bem-sucedido: {username}")
+                                    log_acao("LOGIN", f"Login bem-sucedido: {username} | Empresa: {empresa_sel_nome}")
                                     st.success(f"Bem-vindo, {u['nome']}!")
                                     st.rerun()
                                 break
-                        
+
                         if not login_ok:
                             registrar_tentativa_login(username.lower(), False)
                             tentativas_rest = MAX_TENTATIVAS_LOGIN - st.session_state.login_tentativas.get(
@@ -1576,18 +1673,22 @@ def tem_permissao(nivel: str) -> bool:
 
 
 # ====================== INICIALIZAÇÃO ======================
+# Garantir que a empresa padrão existe antes de criar usuários
+carregar_empresas()  # cria empresas.json se não existir
+
 if not os.path.exists(USUARIOS_FILE):
     usuarios_iniciais = []
-    for uid, nome, uname, perfil_init in [
-        (1, "Administrador",    "admin",       "admin"),
-        (2, "Coordenador RH",   "coordenador", "coordenador"),
-        (3, "Funcionário Teste", "funcionario", "funcionario"),
+    for uid, nome, uname, perfil_init, emp_id in [
+        (1, "Administrador",     "admin",       "admin",       None),  # super admin
+        (2, "Coordenador RH",    "coordenador", "coordenador", 1),
+        (3, "Funcionário Teste", "funcionario", "funcionario", 1),
     ]:
         hash_val, salt = gerar_hash_senha("123456")
-        usuarios_iniciais.append({
-            "id": uid, "nome": nome, "username": uname,
-            "senha": hash_val, "salt": salt, "perfil": perfil_init
-        })
+        u = {"id": uid, "nome": nome, "username": uname,
+             "senha": hash_val, "salt": salt, "perfil": perfil_init}
+        if emp_id is not None:
+            u["empresa_id"] = emp_id
+        usuarios_iniciais.append(u)
     salvar_usuarios(usuarios_iniciais)
 
 # ====================== MAIN ======================
@@ -1609,15 +1710,19 @@ else:
     perfil  = usuario.get("perfil", "funcionario")
 
     # ─── Sidebar ────────────────────────────────────────────────
+    empresa_nome_sessao = st.session_state.get("empresa_nome", "")
     st.sidebar.markdown(f"### 🏢 {SISTEMA_NOME}")
     st.sidebar.markdown(f"*{SISTEMA_SLOGAN}*")
+    if empresa_nome_sessao:
+        st.sidebar.info(f"🏛️ **{empresa_nome_sessao}**")
     st.sidebar.divider()
     st.sidebar.success(f"👤 {usuario['nome']} ({perfil.upper()})")
 
     # Botão de logout
     if st.sidebar.button("🚪 Sair"):
         log_acao("LOGOUT", usuario['username'])
-        for key in ["usuario_logado", "sessao_inicio", "sessao_ultimo_acesso"]:
+        for key in ["usuario_logado", "sessao_inicio", "sessao_ultimo_acesso",
+                    "empresa_id", "empresa_nome"]:
             st.session_state.pop(key, None)
         st.rerun()
 
@@ -1694,6 +1799,7 @@ else:
     if tem_permissao("admin"):
         menu_opcoes.append("📋 Logs do Sistema")
         menu_opcoes.append("⚙️ Configuração de Tabelas")
+        menu_opcoes.append("🏢 Cadastro de Empresas")
         menu_opcoes.append("🏢 Configurações da Empresa")
         menu_opcoes.append("💾 Backup e Restauração")
 
@@ -1707,7 +1813,7 @@ else:
     if menu == "🏠 Dashboard":
         st.header(f"🏠 Dashboard — {SISTEMA_NOME}")
         try:
-            funcs = carregar_funcionarios()
+            funcs = get_funcionarios_empresa()
             ativos   = [f for f in funcs if f.get("situacao") == "Ativo"]
             inativos = [f for f in funcs if f.get("situacao") != "Ativo"]
             
@@ -1920,12 +2026,22 @@ else:
             st.header("👥 Gerenciar Usuários")
             try:
                 usuarios = carregar_usuarios()
+                empresas_cad = carregar_empresas()
+                map_emp = {e["id"]: e["nome"] for e in empresas_cad}
+                opcoes_emp_u = {"— Nenhuma (Admin Global) —": None}
+                opcoes_emp_u.update({e["nome"]: e["id"] for e in empresas_cad if e.get("ativa", True)})
+
                 with st.expander("➕ Novo Usuário"):
                     with st.form("novo_usuario"):
                         nome_u = st.text_input("Nome Completo")
                         username_u = st.text_input("Usuário")
                         senha_u = st.text_input("Senha", type="password")
                         perfil_u = st.selectbox("Perfil", ["admin", "coordenador", "funcionario"])
+                        emp_sel_nome_u = st.selectbox(
+                            "Empresa Vinculada",
+                            list(opcoes_emp_u.keys()),
+                            help="Admin Global não fica restrito a nenhuma empresa."
+                        )
                         if st.form_submit_button("Cadastrar"):
                             if nome_u and username_u and senha_u:
                                 valida, msg_forca = validar_forca_senha(senha_u)
@@ -1940,6 +2056,9 @@ else:
                                         "nome": nome_u, "username": username_u,
                                         "senha": hash_val, "salt": salt, "perfil": perfil_u
                                     }
+                                    emp_id_u = opcoes_emp_u[emp_sel_nome_u]
+                                    if emp_id_u is not None:
+                                        novo["empresa_id"] = emp_id_u
                                     usuarios.append(novo)
                                     salvar_usuarios(usuarios)
                                     log_acao("USUARIO_NOVO", f"{username_u} ({perfil_u})")
@@ -1948,12 +2067,15 @@ else:
                                     st.rerun()
                             else:
                                 st.warning("Preencha todos os campos.")
+
                 st.subheader("Usuários Cadastrados")
                 for u in usuarios:
-                    cols = st.columns([3, 2, 1])
+                    emp_nome_u = map_emp.get(u.get("empresa_id"), "Global")
+                    cols = st.columns([3, 2, 2, 1])
                     cols[0].write(f"**{u['nome']}** — `{u['username']}`")
                     cols[1].write(u["perfil"].upper())
-                    if cols[2].button("🗑️", key=f"del_u_{u['id']}"):
+                    cols[2].write(f"🏛️ {emp_nome_u}")
+                    if cols[3].button("🗑️", key=f"del_u_{u['id']}"):
                         if u["username"] == usuario["username"]:
                             st.error("Não é possível excluir o próprio usuário!")
                         else:
@@ -1973,7 +2095,7 @@ else:
         else:
             st.header("👤 Cadastro de Funcionários")
             try:
-                funcs = carregar_funcionarios()
+                funcs = get_funcionarios_empresa()
                 edit_id = st.session_state.get("edit_id", None)
                 func_edit = next((f for f in funcs if f.get("id") == edit_id), {})
 
@@ -2039,25 +2161,30 @@ else:
                                     "valor_plano": round(valor_plano, 2),
                                     "valor_vt_mensal": round(vt_mensal, 2),
                                     "situacao": situacao,
+                                    "empresa_id": st.session_state.get("empresa_id", 1),
                                 }
                                 if edit_id:
-                                    for f in funcs:
+                                    # Para edição, atualizar em todos os funcionários (sem filtro)
+                                    todos_funcs = carregar_funcionarios()
+                                    for f in todos_funcs:
                                         if f["id"] == edit_id:
                                             f.update(dados_func)
                                             break
                                     log_acao("FUNC_ATUALIZADO", f"ID={edit_id} Nome={nome}")
                                     st.success("Funcionário atualizado!")
                                     st.session_state.edit_id = None
+                                    salvar_funcionarios(todos_funcs)
                                 else:
-                                    novo_id = max([f.get("id", 0) for f in funcs], default=0) + 1
+                                    todos_funcs = carregar_funcionarios()
+                                    novo_id = max([f.get("id", 0) for f in todos_funcs], default=0) + 1
                                     dados_func["id"] = novo_id
                                     dados_func["folha_pagamento"] = {}
-                                    funcs.append(dados_func)
+                                    todos_funcs.append(dados_func)
+                                    salvar_funcionarios(todos_funcs)
                                     log_acao("FUNC_CADASTRADO", f"Nome={nome}")
                                     st.success(f"Funcionário cadastrado! ID: {novo_id}")
                                     # Criar pasta de documentos
                                     pasta_documentos_func(novo_id)
-                                salvar_funcionarios(funcs)
                                 st.rerun()
 
                     if edit_id and st.button("❌ Cancelar Edição"):
@@ -2268,7 +2395,9 @@ else:
         st.header("💰 Folha de Pagamento — Mês a Mês")
         try:
             todos_funcs = carregar_funcionarios()
-            funcs = [f for f in todos_funcs if f.get("situacao") == "Ativo"]
+            _eid = st.session_state.get("empresa_id")
+            funcs = [f for f in todos_funcs if f.get("situacao") == "Ativo"
+                     and (_eid is None or f.get("empresa_id", 1) == _eid)]
             if not funcs:
                 st.warning("Nenhum funcionário ativo.")
             else:
@@ -2451,7 +2580,9 @@ else:
         st.header("🎄 Cálculo do 13º Salário")
         try:
             todos_funcs = carregar_funcionarios()
-            funcs = [f for f in todos_funcs if f.get("situacao") == "Ativo"]
+            _eid = st.session_state.get("empresa_id")
+            funcs = [f for f in todos_funcs if f.get("situacao") == "Ativo"
+                     and (_eid is None or f.get("empresa_id", 1) == _eid)]
             if not funcs:
                 st.warning("Nenhum funcionário ativo.")
             else:
@@ -2537,7 +2668,9 @@ else:
         st.header("🏖️ Cálculo de Férias — CLT")
         try:
             todos_funcs = carregar_funcionarios()
-            funcs = [f for f in todos_funcs if f.get("situacao") == "Ativo"]
+            _eid = st.session_state.get("empresa_id")
+            funcs = [f for f in todos_funcs if f.get("situacao") == "Ativo"
+                     and (_eid is None or f.get("empresa_id", 1) == _eid)]
             if not funcs:
                 st.warning("Nenhum funcionário ativo.")
             else:
@@ -2650,7 +2783,9 @@ else:
         st.header("⚖️ Cálculo de Rescisão Contratual")
         try:
             todos_funcs = carregar_funcionarios()
-            funcs = [f for f in todos_funcs if f.get("situacao") == "Ativo"]
+            _eid = st.session_state.get("empresa_id")
+            funcs = [f for f in todos_funcs if f.get("situacao") == "Ativo"
+                     and (_eid is None or f.get("empresa_id", 1) == _eid)]
             if not funcs:
                 st.warning("Nenhum funcionário ativo.")
             else:
@@ -2970,7 +3105,7 @@ else:
             # ── Gerar Evento Manual ─────────────────────────────
             with tab_novo:
                 st.subheader("➕ Adicionar Evento Manualmente à Fila")
-                funcs_todos = carregar_funcionarios()
+                funcs_todos = get_funcionarios_empresa()
 
                 col_n1, col_n2 = st.columns(2)
                 with col_n1:
@@ -3013,7 +3148,7 @@ else:
             # ── Geração de XMLs ─────────────────────────────────
             with tab_xml:
                 st.subheader("🔧 Geração de Arquivos XML eSocial")
-                funcs_todos = carregar_funcionarios()
+                funcs_todos = get_funcionarios_empresa()
                 funcs_ativos = [f for f in funcs_todos if f.get("situacao") == "Ativo"]
 
                 sub_xml_tab1, sub_xml_tab2, sub_xml_tab3 = st.tabs([
@@ -3125,8 +3260,10 @@ else:
         
         try:
             funcs = carregar_funcionarios()
-            ativos = [f for f in funcs if f.get("situacao") == "Ativo"]
-            
+            _eid = st.session_state.get("empresa_id")
+            ativos = [f for f in funcs if f.get("situacao") == "Ativo"
+                      and (_eid is None or f.get("empresa_id", 1) == _eid)]
+
             if not ativos:
                 st.warning("Nenhum funcionário ativo para lançar ponto.")
             else:
@@ -3248,7 +3385,8 @@ else:
                                 "valor_plano": 0.0,
                                 "valor_vt_mensal": 0.0,
                                 "situacao": "Ativo",
-                                "folha_pagamento": {}
+                                "folha_pagamento": {},
+                                "empresa_id": st.session_state.get("empresa_id", 1),
                             }
                             funcs_atuais.append(novo_f)
                             cpfs_existentes.add(cpf_limpo)
@@ -3349,7 +3487,7 @@ else:
     elif menu == "📄 Relatórios":
         st.header("📄 Relatórios")
         try:
-            funcs_todos = carregar_funcionarios()
+            funcs_todos = get_funcionarios_empresa()
             mostrar_inativos = st.checkbox("Incluir Inativos")
             funcs = funcs_todos if mostrar_inativos else [f for f in funcs_todos if f.get("situacao") == "Ativo"]
             if not funcs:
@@ -3460,12 +3598,12 @@ else:
                     col_r3.metric("Total Plano", fmt_brl(total_plano))
                     col_r4.metric("Outros Desc.", fmt_brl(total_extras_d))
                     col_r4.metric("Total Líquido", fmt_brl(total_liq))
-                    empresa = carregar_dados_empresa()
+                    empresa = get_dados_empresa_sessao()
                     regime = empresa.get("regime", "Simples Nacional")
                     aliq_patronal = empresa.get("aliquota_patronal", 20.0) / 100
                     aliq_rat = empresa.get("aliquota_rat", 2.0) / 100
                     aliq_terc = empresa.get("aliquota_terceiros", 5.8) / 100
-                    
+
                     encargos_patronais = total_b * (aliq_patronal + aliq_rat + aliq_terc)
                     fgts_patronal = total_b * 0.08
                     
@@ -3529,45 +3667,160 @@ else:
             logger.error(f"Erro Relatórios: {e}")
             st.error(f"Erro: {e}")
 
+    # ====================== CADASTRO DE EMPRESAS ======================
+    elif menu == "🏢 Cadastro de Empresas":
+        if not tem_permissao("admin"):
+            st.error("Acesso negado.")
+        else:
+            st.header("🏢 Cadastro de Empresas")
+            try:
+                empresas = carregar_empresas()
+
+                with st.expander("➕ Nova Empresa", expanded=not empresas):
+                    with st.form("form_nova_empresa"):
+                        st.subheader("Dados da Nova Empresa")
+                        c1e, c2e = st.columns(2)
+                        with c1e:
+                            ne_nome   = st.text_input("Razão Social *")
+                            ne_cnpj   = st.text_input("CNPJ *")
+                            ne_end    = st.text_input("Endereço")
+                        with c2e:
+                            ne_regime = st.selectbox("Regime Tributário",
+                                                     ["Simples Nacional", "Lucro Presumido", "Lucro Real"])
+                            ne_aliq_p = st.number_input("INSS Patronal (%)", min_value=0.0, step=1.0)
+                            ne_aliq_r = st.number_input("RAT / FAP (%)", min_value=0.0, step=0.1)
+                            ne_aliq_t = st.number_input("Terceiros (%)", min_value=0.0, step=0.1)
+                        if st.form_submit_button("💾 Cadastrar Empresa", type="primary"):
+                            if not ne_nome or not ne_cnpj:
+                                st.error("Razão Social e CNPJ são obrigatórios.")
+                            elif any(e.get("cnpj", "").replace(".", "").replace("/", "").replace("-", "") ==
+                                     ne_cnpj.replace(".", "").replace("/", "").replace("-", "") for e in empresas):
+                                st.error("Já existe uma empresa com este CNPJ.")
+                            else:
+                                novo_id_emp = max([e.get("id", 0) for e in empresas], default=0) + 1
+                                empresas.append({
+                                    "id": novo_id_emp, "ativa": True,
+                                    "nome": ne_nome.strip(), "cnpj": ne_cnpj.strip(),
+                                    "endereco": ne_end.strip(), "regime": ne_regime,
+                                    "aliquota_patronal": ne_aliq_p,
+                                    "aliquota_rat": ne_aliq_r,
+                                    "aliquota_terceiros": ne_aliq_t,
+                                })
+                                salvar_empresas(empresas)
+                                log_acao("EMPRESA_CADASTRADA", f"{ne_nome} | CNPJ: {ne_cnpj}")
+                                st.success(f"Empresa '{ne_nome}' cadastrada com ID {novo_id_emp}!")
+                                st.rerun()
+
+                st.subheader("Empresas Cadastradas")
+                if not empresas:
+                    st.info("Nenhuma empresa cadastrada.")
+                for emp_item in empresas:
+                    status_icon = "🟢" if emp_item.get("ativa", True) else "🔴"
+                    with st.expander(f"{status_icon} **{emp_item['nome']}** — CNPJ: {emp_item.get('cnpj', '')} (ID: {emp_item['id']})"):
+                        with st.form(f"form_edit_emp_{emp_item['id']}"):
+                            ec1, ec2 = st.columns(2)
+                            with ec1:
+                                e_nome   = st.text_input("Razão Social", value=emp_item.get("nome", ""), key=f"en_{emp_item['id']}")
+                                e_cnpj   = st.text_input("CNPJ", value=emp_item.get("cnpj", ""), key=f"ec_{emp_item['id']}")
+                                e_end    = st.text_input("Endereço", value=emp_item.get("endereco", ""), key=f"ee_{emp_item['id']}")
+                            with ec2:
+                                regime_opts = ["Simples Nacional", "Lucro Presumido", "Lucro Real"]
+                                idx_reg = regime_opts.index(emp_item.get("regime", "Simples Nacional")) if emp_item.get("regime") in regime_opts else 0
+                                e_regime = st.selectbox("Regime Tributário", regime_opts, index=idx_reg, key=f"er_{emp_item['id']}")
+                                e_aliq_p = st.number_input("INSS Patronal (%)", value=float(emp_item.get("aliquota_patronal", 0.0)), step=1.0, key=f"ep_{emp_item['id']}")
+                                e_aliq_r = st.number_input("RAT / FAP (%)", value=float(emp_item.get("aliquota_rat", 0.0)), step=0.1, key=f"er2_{emp_item['id']}")
+                                e_aliq_t = st.number_input("Terceiros (%)", value=float(emp_item.get("aliquota_terceiros", 0.0)), step=0.1, key=f"et_{emp_item['id']}")
+                                e_ativa  = st.checkbox("Empresa Ativa", value=emp_item.get("ativa", True), key=f"ea_{emp_item['id']}")
+                            col_sv, col_del = st.columns([3, 1])
+                            with col_sv:
+                                if st.form_submit_button("💾 Salvar Alterações", type="primary"):
+                                    for e in empresas:
+                                        if e["id"] == emp_item["id"]:
+                                            e.update({
+                                                "nome": e_nome.strip(), "cnpj": e_cnpj.strip(),
+                                                "endereco": e_end.strip(), "regime": e_regime,
+                                                "aliquota_patronal": e_aliq_p, "aliquota_rat": e_aliq_r,
+                                                "aliquota_terceiros": e_aliq_t, "ativa": e_ativa,
+                                            })
+                                            break
+                                    salvar_empresas(empresas)
+                                    log_acao("EMPRESA_ATUALIZADA", f"ID={emp_item['id']} {e_nome}")
+                                    st.success("Empresa atualizada!")
+                                    st.rerun()
+                            with col_del:
+                                if st.form_submit_button("🗑️ Excluir"):
+                                    funcs_emp = [f for f in carregar_funcionarios() if f.get("empresa_id") == emp_item["id"]]
+                                    if funcs_emp:
+                                        st.error(f"Não é possível excluir: {len(funcs_emp)} funcionário(s) vinculado(s).")
+                                    elif len(empresas) <= 1:
+                                        st.error("É obrigatório manter ao menos uma empresa.")
+                                    else:
+                                        empresas = [e for e in empresas if e["id"] != emp_item["id"]]
+                                        salvar_empresas(empresas)
+                                        log_acao("EMPRESA_EXCLUIDA", f"ID={emp_item['id']}")
+                                        st.success("Empresa excluída!")
+                                        st.rerun()
+            except Exception as e:
+                logger.error(f"Erro Cadastro Empresas: {e}")
+                st.error(f"Erro: {e}")
+
     # ====================== CONFIGURAÇÕES DA EMPRESA ======================
     elif menu == "🏢 Configurações da Empresa":
         if not tem_permissao("admin"):
             st.error("Acesso negado.")
         else:
             st.header("🏢 Configurações da Empresa")
-            empresa = carregar_dados_empresa()
-            
+            # Carrega empresa da sessão atual de empresas.json
+            empresas_cfg = carregar_empresas()
+            eid_cfg = st.session_state.get("empresa_id")
+            empresa_cfg = next((e for e in empresas_cfg if e["id"] == eid_cfg), None)
+            if empresa_cfg is None and empresas_cfg:
+                empresa_cfg = empresas_cfg[0]
+            if empresa_cfg is None:
+                st.warning("Nenhuma empresa encontrada. Vá em Cadastro de Empresas para criar uma.")
+                st.stop()
+
+            st.info(f"Editando: **{empresa_cfg['nome']}** (ID {empresa_cfg['id']})")
+
             with st.form("form_empresa"):
                 st.subheader("Dados Cadastrais")
                 col1, col2 = st.columns(2)
                 with col1:
-                    emp_nome = st.text_input("Razão Social", value=empresa.get("nome", ""))
-                    emp_cnpj = st.text_input("CNPJ", value=empresa.get("cnpj", ""))
-                    emp_end  = st.text_input("Endereço", value=empresa.get("endereco", ""))
+                    emp_nome = st.text_input("Razão Social", value=empresa_cfg.get("nome", ""))
+                    emp_cnpj = st.text_input("CNPJ", value=empresa_cfg.get("cnpj", ""))
+                    emp_end  = st.text_input("Endereço", value=empresa_cfg.get("endereco", ""))
                 with col2:
-                    emp_regime = st.selectbox("Regime Tributário", 
-                                             ["Simples Nacional", "Lucro Presumido", "Lucro Real"],
-                                             index=0 if empresa.get("regime") == "Simples Nacional" else 1)
+                    regime_vals = ["Simples Nacional", "Lucro Presumido", "Lucro Real"]
+                    idx_r = regime_vals.index(empresa_cfg.get("regime", "Simples Nacional")) if empresa_cfg.get("regime") in regime_vals else 0
+                    emp_regime = st.selectbox("Regime Tributário", regime_vals, index=idx_r)
                     st.caption("ℹ️ Simples Nacional (exceto Anexo IV) não recolhe INSS Patronal (20%).")
-                
+
                 st.divider()
                 st.subheader("Configuração de Encargos Patronais")
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    aliq_p = st.number_input("INSS Patronal (%)", value=float(empresa.get("aliquota_patronal", 0.0)), step=1.0)
+                    aliq_p = st.number_input("INSS Patronal (%)", value=float(empresa_cfg.get("aliquota_patronal", 0.0)), step=1.0)
                 with c2:
-                    aliq_r = st.number_input("RAT / FAP (%)", value=float(empresa.get("aliquota_rat", 0.0)), step=0.1)
+                    aliq_r = st.number_input("RAT / FAP (%)", value=float(empresa_cfg.get("aliquota_rat", 0.0)), step=0.1)
                 with c3:
-                    aliq_t = st.number_input("Terceiros (%)", value=float(empresa.get("aliquota_terceiros", 0.0)), step=0.1)
-                
+                    aliq_t = st.number_input("Terceiros (%)", value=float(empresa_cfg.get("aliquota_terceiros", 0.0)), step=0.1)
+
                 if st.form_submit_button("💾 Salvar Configurações", type="primary"):
-                    empresa.update({
-                        "nome": emp_nome, "cnpj": emp_cnpj, "endereco": emp_end, "regime": emp_regime,
-                        "aliquota_patronal": aliq_p, "aliquota_rat": aliq_r, "aliquota_terceiros": aliq_t
-                    })
-                    salvar_dados_empresa(empresa)
+                    for e in empresas_cfg:
+                        if e["id"] == empresa_cfg["id"]:
+                            e.update({
+                                "nome": emp_nome, "cnpj": emp_cnpj, "endereco": emp_end,
+                                "regime": emp_regime, "aliquota_patronal": aliq_p,
+                                "aliquota_rat": aliq_r, "aliquota_terceiros": aliq_t
+                            })
+                            break
+                    salvar_empresas(empresas_cfg)
+                    # Manter compatibilidade com empresa.json legado
+                    salvar_dados_empresa({"nome": emp_nome, "cnpj": emp_cnpj, "endereco": emp_end,
+                                          "regime": emp_regime, "aliquota_patronal": aliq_p,
+                                          "aliquota_rat": aliq_r, "aliquota_terceiros": aliq_t})
                     log_acao("CONFIG_EMPRESA", f"Regime: {emp_regime}")
-                    st.success("Configurações da empresa salvas com sucesso!")
+                    st.success("Configurações salvas com sucesso!")
                     st.rerun()
 
     # ====================== LOGS ======================
