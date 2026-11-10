@@ -93,14 +93,15 @@ Módulo para carga massiva de informações via arquivos CSV.
 ## 4. Regras de Cálculo (2026)
 
 **INSS (Progressivo):**
-- Até R$ 1.518,00 → 7,5%
-- Até R$ 2.793,88 → 9,0%
-- Até R$ 4.190,83 → 12,0%
-- Até R$ 8.157,41 → 14,0%
+- Até R$ 1.621,00 → 7,5%
+- Até R$ 2.902,84 → 9,0%
+- Até R$ 4.354,27 → 12,0%
+- Até R$ 8.475,55 → 14,0% (teto)
 
 **IRRF:**
-- Até R$ 2.259,20 → Isento
-- Dedução por dependente: R$ 189,59
+- Tabela progressiva: até R$ 2.428,80 isento; 7,5% / 15% / 22,5% / 27,5% acima
+- Dedução por dependente: R$ 189,59 | Desconto simplificado: R$ 607,20
+- Redução da Lei nº 15.270/2025: imposto zerado até R$ 5.000,00 de rendimento e redução parcial até R$ 7.350,00
 
 **Vale-Transporte:** limitado a 6% do salário base
 
