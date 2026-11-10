@@ -272,41 +272,72 @@ def descriptografar_dados(dados_cripto: bytes) -> str:
 
 
 # ====================== CARREGAR / SALVAR ======================
+# Tabelas oficiais 2026.
+# INSS: Portaria Interministerial MPS/MF de janeiro/2026 (salário mínimo R$ 1.621,00).
+# IRRF: tabela progressiva mensal vigente desde 05/2025 + redução da Lei nº 15.270/2025
+#       (isenção efetiva até R$ 5.000,00 e redução parcial até R$ 7.350,00).
+TABELAS_ANO_VIGENTE = 2026
+TABELAS_PADRAO = {
+    "ano": TABELAS_ANO_VIGENTE,
+    "inss": {
+        "faixas": [
+            {"limite": 1621.00, "aliquota": 0.075},
+            {"limite": 2902.84, "aliquota": 0.09},
+            {"limite": 4354.27, "aliquota": 0.12},
+            {"limite": 8475.55, "aliquota": 0.14},
+        ],
+        "teto_base": 8475.55,
+    },
+    "irrf": {
+        "deducao_dependente": 189.59,
+        "desconto_simplificado": 607.20,
+        "faixas": [
+            {"limite": 2428.80, "aliquota": 0.0, "deducao": 0.0},
+            {"limite": 2826.65, "aliquota": 0.075, "deducao": 182.16},
+            {"limite": 3751.05, "aliquota": 0.15, "deducao": 394.16},
+            {"limite": 4664.68, "aliquota": 0.225, "deducao": 675.49},
+            {"limite": 99999999.0, "aliquota": 0.275, "deducao": 908.73},
+        ],
+        # Redução mensal do imposto (Lei 15.270/2025), calculada sobre o rendimento tributável bruto:
+        #   bruto <= limite_isencao            -> redução de até reducao_maxima (zera o imposto)
+        #   limite_isencao < bruto <= limite_reducao -> redução = constante - fator * bruto
+        "reducao": {
+            "limite_isencao": 5000.00,
+            "reducao_maxima": 312.89,
+            "limite_reducao": 7350.00,
+            "constante": 978.62,
+            "fator": 0.133145,
+        },
+    },
+}
+
+
 @st.cache_data
 def carregar_tabelas():
     """Carrega as tabelas de INSS e IRRF do arquivo tabelas.json.
 
     Resultados são cacheados pelo Streamlit; use st.cache_data.clear() após salvar.
-    Retorna tabelas com valores padrão de 2026 se o arquivo não existir.
+    Retorna as tabelas padrão de 2026 se o arquivo não existir. Arquivos de anos
+    anteriores (sem a chave "ano" ou com ano < 2026) são copiados para
+    tabelas_<ano>_backup.json e substituídos automaticamente pelas tabelas de 2026.
     """
     try:
         if os.path.exists(TABELAS_FILE):
             with open(TABELAS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {
-            "inss": {
-                "faixas": [
-                    {"limite": 1518.00, "aliquota": 0.075},
-                    {"limite": 2793.88, "aliquota": 0.09},
-                    {"limite": 4190.83, "aliquota": 0.12},
-                    {"limite": 8157.41, "aliquota": 0.14}
-                ],
-                "teto_base": 8157.41
-            },
-            "irrf": {
-                "deducao_dependente": 189.59,
-                "faixas": [
-                    {"limite": 2259.20, "aliquota": 0.0, "deducao": 0.0},
-                    {"limite": 2826.65, "aliquota": 0.075, "deducao": 169.44},
-                    {"limite": 3751.05, "aliquota": 0.15, "deducao": 381.44},
-                    {"limite": 4664.68, "aliquota": 0.225, "deducao": 662.77},
-                    {"limite": 99999999.0, "aliquota": 0.275, "deducao": 896.00}
-                ]
-            }
-        }
+                dados = json.load(f)
+            ano_arq = dados.get("ano", 0)
+            if ano_arq < TABELAS_ANO_VIGENTE:
+                bkp = os.path.join(DATA_DIR, f"tabelas_{ano_arq or 'antigas'}_backup.json")
+                with open(bkp, "w", encoding="utf-8") as fb:
+                    json.dump(dados, fb, ensure_ascii=False, indent=4)
+                salvar_tabelas(TABELAS_PADRAO)
+                logger.info(f"Tabelas INSS/IRRF migradas para {TABELAS_ANO_VIGENTE} (backup: {bkp})")
+                return json.loads(json.dumps(TABELAS_PADRAO))
+            return dados
+        return json.loads(json.dumps(TABELAS_PADRAO))
     except Exception as e:
         logger.error(f"Erro ao carregar tabelas: {e}")
-        return {}
+        return json.loads(json.dumps(TABELAS_PADRAO))
 
 def salvar_tabelas(dados):
     """Persiste o dicionário de tabelas INSS/IRRF em tabelas.json. Retorna True se salvo."""
@@ -699,31 +730,52 @@ def calcular_inss(salario: float) -> float:
         return 0.0
 
 
-def calcular_irrf(base: float, dependentes: int = 0) -> float:
-    """Calcula o IRRF mensal sobre a base tributável após dedução de dependentes.
+def calcular_irrf(base: float, dependentes: int = 0, bruto: float = None) -> float:
+    """Calcula o IRRF mensal (regras 2026).
 
-    Subtrai R$ 189,59 por dependente da base antes de aplicar a tabela progressiva.
-    Retorna 0,00 na faixa de isenção.
+    base:  rendimento tributável já deduzido do INSS (bruto − INSS).
+    bruto: rendimento tributável bruto. Quando informado, o cálculo:
+      1. usa a dedução mais vantajosa entre a legal (INSS + R$ 189,59 por
+         dependente) e o desconto simplificado mensal (R$ 607,20);
+      2. aplica a redução da Lei nº 15.270/2025 — imposto zerado para
+         rendimentos até R$ 5.000,00 e redução decrescente até R$ 7.350,00.
+    Sem `bruto`, ele é estimado como `base` (comportamento conservador).
     """
     try:
         if base <= 0:
             return 0.0
-            
+
         tabelas = carregar_tabelas()
-        dados_irrf = tabelas.get("irrf", {})
-        ded_dep_val = dados_irrf.get("deducao_dependente", 189.59)
-        faixas_raw = dados_irrf.get("faixas", [])
-        
-        ded_dep = dependentes * ded_dep_val
-        base_calc = max(0.0, base - ded_dep)
-        
-        # Converter lista de dicts para lista de tuplas (limite, aliquota, deducao)
-        faixas = [(f["limite"], f["aliquota"], f["deducao"]) for f in faixas_raw]
-        
-        for limite, aliquota, deducao in faixas:
-            if base_calc <= limite:
-                return max(0.0, round(base_calc * aliquota - deducao, 2))
-        return 0.0
+        padrao = TABELAS_PADRAO["irrf"]
+        dados_irrf = tabelas.get("irrf", {}) or padrao
+        ded_dep_val = dados_irrf.get("deducao_dependente", padrao["deducao_dependente"])
+        desc_simpl = dados_irrf.get("desconto_simplificado", padrao["desconto_simplificado"])
+        faixas_raw = dados_irrf.get("faixas") or padrao["faixas"]
+        red = {**padrao["reducao"], **(dados_irrf.get("reducao") or {})}
+
+        base_legal = max(0.0, base - dependentes * ded_dep_val)
+        if bruto is not None and bruto > 0:
+            base_calc = min(base_legal, max(0.0, bruto - desc_simpl))
+            rend = bruto
+        else:
+            base_calc = base_legal
+            rend = base
+
+        imposto = 0.0
+        for f in faixas_raw:
+            if base_calc <= f["limite"]:
+                imposto = max(0.0, base_calc * f["aliquota"] - f["deducao"])
+                break
+
+        # Redução da Lei 15.270/2025
+        if rend <= red["limite_isencao"]:
+            reducao = red["reducao_maxima"]
+        elif rend <= red["limite_reducao"]:
+            reducao = max(0.0, red["constante"] - red["fator"] * rend)
+        else:
+            reducao = 0.0
+        imposto = max(0.0, imposto - reducao)
+        return round(imposto, 2)
     except Exception as e:
         logger.error(f"Erro calcular_irrf: {e}")
         return 0.0
@@ -740,29 +792,44 @@ def calcular_vt(salario: float, vt_mensal: float) -> float:
         return 0.0
 
 
+def _aniversario(d: date, ano: int) -> date:
+    """Mesmo dia/mês de `d` no ano informado; 29/02 vira 28/02 em anos não bissextos."""
+    try:
+        return date(ano, d.month, d.day)
+    except ValueError:
+        return date(ano, 2, 28)
+
+
+def _para_date(valor):
+    """Converte string ISO, datetime ou date em date."""
+    if isinstance(valor, str):
+        return datetime.fromisoformat(valor).date()
+    if isinstance(valor, datetime):
+        return valor.date()
+    return valor
+
+
 def calcular_avos(data_admissao, ano: int = 2026) -> int:
     """Conta os avos trabalhados no ano para cálculo do 13º salário.
 
     Um avo é contado quando o funcionário trabalha 15 ou mais dias no mês
-    (conforme art. 1º da Lei nº 4.090/1962).
+    (conforme art. 1º da Lei nº 4.090/1962). Retorna 0 se a admissão for
+    posterior ao ano informado.
     """
+    import calendar
     try:
         if not data_admissao:
             return 12
-        adm = datetime.fromisoformat(data_admissao) if isinstance(data_admissao, str) else data_admissao
+        adm = _para_date(data_admissao)
         avos = 0
         for mes in range(1, 13):
-            import calendar
-            ultimo_dia_num = calendar.monthrange(ano, mes)[1]
-            ultimo_dia = date(ano, mes, ultimo_dia_num)
-            primeiro_dia = date(ano, mes, 1)
-            if adm.date() > ultimo_dia:
+            ultimo_dia = date(ano, mes, calendar.monthrange(ano, mes)[1])
+            if adm > ultimo_dia:
                 continue
-            inicio_real = max(adm.date(), primeiro_dia)
-            dias_trabalhados = (ultimo_dia - inicio_real).days + 1
-            if dias_trabalhados >= 15:
+            inicio_real = max(adm, date(ano, mes, 1))
+            if (ultimo_dia - inicio_real).days + 1 >= 15:
                 avos += 1
-        return max(1, avos)
+        return avos
     except Exception as e:
         logger.error(f"Erro calcular_avos: {e}")
         return 12
@@ -771,26 +838,22 @@ def calcular_avos(data_admissao, ano: int = 2026) -> int:
 def calcular_periodo_aquisitivo(data_admissao, mes_pagamento: str = "04/2026"):
     """Determina o período aquisitivo de férias vigente na data de referência.
 
-    Retorna (meses_trabalhados, ano_inicio_periodo, descricao_status).
+    O período começa no último aniversário de admissão anterior ou igual a
+    01/mês_pagamento. Admissões em 29/02 usam 28/02 nos anos não bissextos.
+    Retorna (meses_trabalhados, ano_inicio_periodo, descricao_status);
+    meses_trabalhados é 0 se a admissão for posterior à referência.
     """
     try:
         if not data_admissao:
             return 12, 2026, "Sem data de admissão"
-        adm = datetime.fromisoformat(data_admissao) if isinstance(data_admissao, str) else data_admissao
+        adm = _para_date(data_admissao)
         mes_ref, ano_ref = map(int, mes_pagamento.split('/'))
         data_ref = date(ano_ref, mes_ref, 1)
-        ano_inicio = adm.year
-        while True:
-            inicio_periodo = date(ano_inicio, adm.month, adm.day)
-            fim_periodo = date(ano_inicio + 1, adm.month, adm.day - 1 if adm.day > 1 else 1)
-            if inicio_periodo <= data_ref:
-                if data_ref >= fim_periodo:
-                    ano_inicio += 1
-                else:
-                    break
-            else:
-                break
-        inicio_periodo = date(ano_inicio, adm.month, adm.day)
+        if adm > data_ref:
+            return 0, adm.year, "Admissão posterior ao mês de referência"
+        ano_inicio = ano_ref if _aniversario(adm, ano_ref) <= data_ref else ano_ref - 1
+        ano_inicio = max(ano_inicio, adm.year)
+        inicio_periodo = adm if ano_inicio == adm.year else _aniversario(adm, ano_inicio)
         meses = (data_ref.year - inicio_periodo.year) * 12 + (data_ref.month - inicio_periodo.month)
         if data_ref.day >= inicio_periodo.day:
             meses += 1
@@ -947,7 +1010,7 @@ def gerar_contracheque_pdf(func: dict, mes: str = "04/2026") -> BytesIO:
             salario = func.get("salario_base", 0)
             inss = calcular_inss(salario)
             base_irrf = salario - inss
-            irrf = calcular_irrf(base_irrf, func.get("num_dependentes", 0))
+            irrf = calcular_irrf(base_irrf, func.get("num_dependentes", 0), bruto=salario)
             vt = calcular_vt(salario, func.get("valor_vt_mensal", 0))
             plano = func.get("valor_plano", 0) if func.get("tem_plano_saude") == "Sim" else 0
             liquido = round(salario - (inss + irrf + vt + plano), 2)
@@ -1050,7 +1113,7 @@ def gerar_folha_analitica_pdf(funcs: list, mes: str) -> BytesIO:
             if not folha:
                 salario = func.get("salario_base", 0)
                 inss = calcular_inss(salario)
-                irrf = calcular_irrf(salario - inss, func.get("num_dependentes", 0))
+                irrf = calcular_irrf(salario - inss, func.get("num_dependentes", 0), bruto=salario)
                 vt = calcular_vt(salario, func.get("valor_vt_mensal", 0))
                 plano = func.get("valor_plano", 0) if func.get("tem_plano_saude") == "Sim" else 0
                 outros_p = 0.0
@@ -1205,7 +1268,7 @@ def gerar_decimo_pdf(func: dict, ano: int, tipo: str, valor: float, avos: int = 
         story.append(Spacer(1, 5*mm))
         story.append(Paragraph("<b>CÁLCULO</b>", secao_s))
         inss_13 = calcular_inss(valor) if tipo.lower() == "final" else 0.0
-        irrf_13 = calcular_irrf(valor - inss_13, func.get("num_dependentes", 0)) if tipo.lower() == "final" else 0.0
+        irrf_13 = calcular_irrf(valor - inss_13, func.get("num_dependentes", 0), bruto=valor) if tipo.lower() == "final" else 0.0
         liquido_13 = round(valor - inss_13 - irrf_13, 2)
         itens = [
             ["Salário Base", fmt_brl(func.get("salario_base", 0))],
@@ -1410,7 +1473,7 @@ def gerar_resumo_folha_pdf(funcs: list, mes: str) -> BytesIO:
             folha = func.get("folha_pagamento", {}).get(mes, {})
             sb = folha.get("salario_base", func.get("salario_base", 0)) if folha else func.get("salario_base", 0)
             in_ = folha.get("inss", calcular_inss(sb)) if folha else calcular_inss(sb)
-            ir = folha.get("irrf", 0) if folha else calcular_irrf(sb - in_, func.get("num_dependentes", 0))
+            ir = folha.get("irrf", 0) if folha else calcular_irrf(sb - in_, func.get("num_dependentes", 0), bruto=sb)
             vt = folha.get("vt", 0) if folha else calcular_vt(sb, func.get("valor_vt_mensal", 0))
             pl = folha.get("plano_saude", 0) if folha else (func.get("valor_plano", 0) if func.get("tem_plano_saude") == "Sim" else 0)
             lq = folha.get("liquido", 0) if folha else round(sb - in_ - ir - vt - pl, 2)
@@ -2138,7 +2201,7 @@ else:
         st.header("📖 Manual do Sistema")
         try:
             data_str = datetime.now().strftime("%d/%m/%Y")
-            conteudo = MANUAL_UTILIZACAO.format(data_atual=data_str)
+            conteudo = MANUAL_UTILIZACAO.replace("{data_atual}", data_str)
             st.markdown(conteudo)
             
             st.divider()
@@ -2596,7 +2659,7 @@ else:
                             # Encargos Legais (sobre Salário + HE + DSR)
                             base_calculo = s + he_50_val + he_100_val + dsr_he
                             inss = calcular_inss(base_calculo)
-                            irrf = calcular_irrf(base_calculo - inss, func.get("num_dependentes", 0))
+                            irrf = calcular_irrf(base_calculo - inss, func.get("num_dependentes", 0), bruto=base_calculo)
                             vt = calcular_vt(s, func.get("valor_vt_mensal", 0))
                             plano = func.get("valor_plano", 0) if func.get("tem_plano_saude") == "Sim" else 0
                             
@@ -2706,7 +2769,7 @@ else:
 
                                 if st.form_submit_button("💾 Calcular e Salvar"):
                                     inss = calcular_inss(s_m)
-                                    irrf = calcular_irrf(s_m - inss, func.get("num_dependentes", 0))
+                                    irrf = calcular_irrf(s_m - inss, func.get("num_dependentes", 0), bruto=s_m)
                                     vt = calcular_vt(s_m, vt_m)
                                     
                                     # Processar itens extras
@@ -2770,7 +2833,7 @@ else:
                             avos = calcular_avos(func.get("data_admissao"), ano)
                             valor_bruto = round(func.get("salario_base", 0) * (avos / 12), 2)
                             inss_13 = calcular_inss(valor_bruto)
-                            irrf_13 = calcular_irrf(valor_bruto - inss_13, func.get("num_dependentes", 0))
+                            irrf_13 = calcular_irrf(valor_bruto - inss_13, func.get("num_dependentes", 0), bruto=valor_bruto)
                             liquido_13 = round(valor_bruto - inss_13 - irrf_13, 2)
                         else:
                             avos = 12
@@ -2870,7 +2933,7 @@ else:
                         total_bruto = round(ferias_com_terco + abono_total + decimo_ferias, 2)
                         inss_ferias = calcular_inss(ferias_com_terco + decimo_ferias) if calcular_inss_ferias else 0.0
                         base_irrf_f = (ferias_com_terco + decimo_ferias) - inss_ferias
-                        irrf_ferias = calcular_irrf(base_irrf_f, func.get("num_dependentes", 0)) if calcular_irrf_ferias_chk else 0.0
+                        irrf_ferias = calcular_irrf(base_irrf_f, func.get("num_dependentes", 0), bruto=ferias_com_terco + decimo_ferias) if calcular_irrf_ferias_chk else 0.0
                         total_liquido = round(total_bruto - inss_ferias - irrf_ferias, 2)
                         st.session_state[f"ferias_calc_{func['id']}"] = {
                             "dias_ferias": dias_ferias, "dias_abono": dias_abono,
@@ -3002,9 +3065,9 @@ else:
                             fgts_multa = round(fgts_estimado * 0.20, 2)
                         total_bruto = round(saldo_salario + ferias_vencidas + ferias_prop_total + decimo_prop + aviso_previo + fgts_multa, 2)
                         base_inss = round(saldo_salario + ferias_prop_total + decimo_prop + aviso_previo, 2)
-                        inss_resc = calcular_inss(min(base_inss, 8157.41))
+                        inss_resc = calcular_inss(base_inss)  # calcular_inss já aplica o teto da tabela
                         base_irrf = round(base_inss - inss_resc, 2)
-                        irrf_resc = calcular_irrf(base_irrf, func.get("num_dependentes", 0))
+                        irrf_resc = calcular_irrf(base_irrf, func.get("num_dependentes", 0), bruto=base_inss)
                         liquido = round(total_bruto - inss_resc - irrf_resc, 2)
                         valores = {
                             "saldo_salario": saldo_salario,
@@ -3606,7 +3669,7 @@ else:
                             if mes_v not in f_alvo["folha_pagamento"]:
                                 s = f_alvo.get("salario_base", 0)
                                 inss = calcular_inss(s)
-                                irrf = calcular_irrf(s - inss, f_alvo.get("num_dependentes", 0))
+                                irrf = calcular_irrf(s - inss, f_alvo.get("num_dependentes", 0), bruto=s)
                                 vt = calcular_vt(s, f_alvo.get("valor_vt_mensal", 0))
                                 p = f_alvo.get("valor_plano", 0) if f_alvo.get("tem_plano_saude") == "Sim" else 0
                                 f_alvo["folha_pagamento"][mes_v] = {
@@ -3675,7 +3738,7 @@ else:
                     salario = func_m.get("salario_base", 0)
                     inss = calcular_inss(salario)
                     base_ir = salario - inss
-                    irrf = calcular_irrf(base_ir, func_m.get("num_dependentes", 0))
+                    irrf = calcular_irrf(base_ir, func_m.get("num_dependentes", 0), bruto=salario)
                     vt = calcular_vt(salario, func_m.get("valor_vt_mensal", 0))
                     plano = func_m.get("valor_plano", 0) if func_m.get("tem_plano_saude") == "Sim" else 0
                     liquido = round(salario - inss - irrf - vt - plano, 2)
@@ -3698,7 +3761,7 @@ else:
                         folha = func.get("folha_pagamento", {}).get(mes, {})
                         s = folha.get("salario_base", func.get("salario_base", 0)) if folha else func.get("salario_base", 0)
                         inss = folha.get("inss", calcular_inss(s)) if folha else calcular_inss(s)
-                        irrf = folha.get("irrf", 0) if folha else calcular_irrf(s - inss, func.get("num_dependentes", 0))
+                        irrf = folha.get("irrf", 0) if folha else calcular_irrf(s - inss, func.get("num_dependentes", 0), bruto=s)
                         vt = folha.get("vt", 0) if folha else calcular_vt(s, func.get("valor_vt_mensal", 0))
                         plano = folha.get("plano_saude", 0) if folha else (func.get("valor_plano", 0) if func.get("tem_plano_saude") == "Sim" else 0)
                         extras = folha.get("itens_extras", [])
@@ -3743,7 +3806,7 @@ else:
                         else:
                             s = f.get("salario_base", 0)
                             i = calcular_inss(s)
-                            ir = calcular_irrf(s - i, f.get("num_dependentes", 0))
+                            ir = calcular_irrf(s - i, f.get("num_dependentes", 0), bruto=s)
                             v = calcular_vt(s, f.get("valor_vt_mensal", 0))
                             p = f.get("valor_plano", 0) if f.get("tem_plano_saude") == "Sim" else 0
                             total_b += s
@@ -4050,7 +4113,7 @@ else:
             new_faixas_inss = st.data_editor(faixas_inss, num_rows="fixed", use_container_width=True, key="editor_inss")
             
             teto_inss = st.number_input("Teto da Base de Cálculo INSS (R$)", 
-                                       value=float(dados_inss.get("teto_base", 8157.41)), 
+                                       value=float(dados_inss.get("teto_base", TABELAS_PADRAO["inss"]["teto_base"])), 
                                        step=100.0, format="%.2f")
             
             st.divider()
@@ -4063,19 +4126,49 @@ else:
             st.write("Faixas de IRRF:")
             new_faixas_irrf = st.data_editor(faixas_irrf, num_rows="fixed", use_container_width=True, key="editor_irrf")
             
-            ded_dep = st.number_input("Dedução por Dependente (R$)", 
-                                     value=float(dados_irrf.get("deducao_dependente", 189.59)), 
+            pad_irrf = TABELAS_PADRAO["irrf"]
+            red_atual = {**pad_irrf["reducao"], **(dados_irrf.get("reducao") or {})}
+            c_d1, c_d2 = st.columns(2)
+            ded_dep = c_d1.number_input("Dedução por Dependente (R$)",
+                                     value=float(dados_irrf.get("deducao_dependente", pad_irrf["deducao_dependente"])),
                                      step=1.0, format="%.2f")
-            
+            desc_simpl = c_d2.number_input("Desconto Simplificado Mensal (R$)",
+                                     value=float(dados_irrf.get("desconto_simplificado", pad_irrf["desconto_simplificado"])),
+                                     step=1.0, format="%.2f",
+                                     help="Usado no lugar de INSS + dependentes quando for mais vantajoso ao funcionário.")
+
+            st.write("Redução do IR — Lei nº 15.270/2025:")
+            c_r1, c_r2, c_r3 = st.columns(3)
+            r_isen = c_r1.number_input("Isenção até (R$)", value=float(red_atual["limite_isencao"]), step=100.0, format="%.2f")
+            r_max = c_r2.number_input("Redução máxima (R$)", value=float(red_atual["reducao_maxima"]), step=1.0, format="%.2f")
+            r_lim = c_r3.number_input("Redução parcial até (R$)", value=float(red_atual["limite_reducao"]), step=100.0, format="%.2f")
+            c_r4, c_r5 = st.columns(2)
+            r_const = c_r4.number_input("Constante da fórmula (R$)", value=float(red_atual["constante"]), step=0.01, format="%.2f")
+            r_fator = c_r5.number_input("Fator da fórmula", value=float(red_atual["fator"]), step=0.000001, format="%.6f")
+            st.caption(f"Faixa parcial: redução = {r_const:.2f} − {r_fator:.6f} × rendimento bruto.")
+
+            if st.button("↩️ Restaurar Tabelas Oficiais 2026"):
+                if salvar_tabelas(TABELAS_PADRAO):
+                    st.cache_data.clear()
+                    log_acao("CONFIG_TABELAS", "Tabelas de INSS/IRRF restauradas para o padrão 2026")
+                    _set_flash("success", "✅ Tabelas oficiais de 2026 restauradas!")
+                    st.rerun()
+
             if st.button("💾 Salvar Todas as Alterações", type="primary"):
                 novas_tabelas = {
+                    "ano": TABELAS_ANO_VIGENTE,
                     "inss": {
                         "faixas": new_faixas_inss.to_dict('records'),
                         "teto_base": teto_inss
                     },
                     "irrf": {
                         "deducao_dependente": ded_dep,
-                        "faixas": new_faixas_irrf.to_dict('records')
+                        "desconto_simplificado": desc_simpl,
+                        "faixas": new_faixas_irrf.to_dict('records'),
+                        "reducao": {
+                            "limite_isencao": r_isen, "reducao_maxima": r_max,
+                            "limite_reducao": r_lim, "constante": r_const, "fator": r_fator,
+                        },
                     }
                 }
                 if salvar_tabelas(novas_tabelas):

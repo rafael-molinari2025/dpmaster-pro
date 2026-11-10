@@ -740,22 +740,35 @@ Exibe as faixas do imposto de renda:
 
 | Faixa | Alíquota |
 |---|---|
-| Até R$ 1.518,00 | 7,5% |
-| De R$ 1.518,01 até R$ 2.793,88 | 9,0% |
-| De R$ 2.793,89 até R$ 4.190,83 | 12,0% |
-| De R$ 4.190,84 até R$ 8.157,41 | 14,0% |
+| Até R$ 1.621,00 | 7,5% |
+| De R$ 1.621,01 até R$ 2.902,84 | 9,0% |
+| De R$ 2.902,85 até R$ 4.354,27 | 12,0% |
+| De R$ 4.354,28 até R$ 8.475,55 | 14,0% |
+
+Teto de contribuição: R$ 8.475,55 (desconto máximo R$ 988,09).
 
 **IRRF (Tabela Mensal):**
 
 | Base de Cálculo | Alíquota | Parcela a Deduzir |
 |---|---|---|
-| Até R$ 2.259,20 | Isento | — |
-| De R$ 2.259,21 até R$ 2.826,65 | 7,5% | R$ 169,44 |
-| De R$ 2.826,66 até R$ 3.751,05 | 15,0% | R$ 381,44 |
-| De R$ 3.751,06 até R$ 4.664,68 | 22,5% | R$ 662,77 |
-| Acima de R$ 4.664,68 | 27,5% | R$ 896,00 |
+| Até R$ 2.428,80 | Isento | — |
+| De R$ 2.428,81 até R$ 2.826,65 | 7,5% | R$ 182,16 |
+| De R$ 2.826,66 até R$ 3.751,05 | 15,0% | R$ 394,16 |
+| De R$ 3.751,06 até R$ 4.664,68 | 22,5% | R$ 675,49 |
+| Acima de R$ 4.664,68 | 27,5% | R$ 908,73 |
 
 **Dedução por dependente:** R$ 189,59 por dependente
+**Desconto simplificado mensal:** R$ 607,20 (usado quando for mais vantajoso que INSS + dependentes)
+
+**Redução do IR (Lei nº 15.270/2025):**
+
+| Rendimento tributável bruto | Redução |
+|---|---|
+| Até R$ 5.000,00 | Até R$ 312,89 (imposto zerado) |
+| De R$ 5.000,01 até R$ 7.350,00 | R$ 978,62 − 0,133145 × rendimento |
+| Acima de R$ 7.350,00 | Sem redução |
+
+Todos esses valores podem ser ajustados em **⚙️ Configuração de Tabelas**, que também possui o botão **"↩️ Restaurar Tabelas Oficiais 2026"**.
 
 ---
 
@@ -874,18 +887,26 @@ Os logs são gravados em arquivo e **não podem ser apagados pela interface do s
 O cálculo é **progressivo** (igual ao IRPF): cada faixa de salário é tributada pela sua alíquota correspondente, e o total é a soma das contribuições em cada faixa.
 
 **Exemplo** para salário de R$ 3.000,00:
-- R$ 1.518,00 × 7,5% = R$ 113,85
-- (R$ 2.793,88 − R$ 1.518,00) × 9% = R$ 114,83
-- (R$ 3.000,00 − R$ 2.793,88) × 12% = R$ 24,74
-- **Total INSS = R$ 253,42**
+- R$ 1.621,00 × 7,5% = R$ 121,58
+- (R$ 2.902,84 − R$ 1.621,00) × 9% = R$ 115,37
+- (R$ 3.000,00 − R$ 2.902,84) × 12% = R$ 11,66
+- **Total INSS = R$ 248,60**
 
 ### 19.2 IRRF — Imposto de Renda Retido na Fonte
 
-Calculado sobre a **base de cálculo** = Salário Bruto − INSS − (Nº dependentes × R$ 189,59)
+1. **Base de cálculo** = a menor entre:
+   - Salário Bruto − INSS − (Nº dependentes × R$ 189,59) *(deduções legais)*
+   - Salário Bruto − R$ 607,20 *(desconto simplificado)*
+2. Aplica-se a tabela progressiva sobre a base.
+3. Aplica-se a **redução da Lei nº 15.270/2025** conforme o rendimento bruto: imposto zerado até R$ 5.000,00 e redução decrescente até R$ 7.350,00.
 
-**Exemplo** para salário líquido de INSS de R$ 2.500,00, 1 dependente:
-- Base = R$ 2.500,00 − R$ 189,59 = R$ 2.310,41
-- Faixa de 7,5%: R$ 2.310,41 × 7,5% − R$ 169,44 = R$ 3,94
+**Exemplo** para salário de R$ 5.500,00, sem dependentes:
+- INSS = R$ 571,51 → base legal = R$ 4.928,49; base simplificada = R$ 4.892,80 (menor, é a usada)
+- Tabela: R$ 4.892,80 × 27,5% − R$ 908,73 = R$ 436,79
+- Redução: R$ 978,62 − 0,133145 × R$ 5.500,00 = R$ 246,32
+- **IRRF = R$ 190,47**
+
+**Exemplo** para salário de R$ 4.800,00: IRRF = **R$ 0,00** (rendimento até R$ 5.000,00).
 
 ### 19.3 Vale-Transporte
 
@@ -997,7 +1018,7 @@ def gerar_manuais():
 
     Path("docs").mkdir(exist_ok=True)
 
-    conteudo_utilizacao = MANUAL_UTILIZACAO.format(data_atual=data_atual)
+    conteudo_utilizacao = MANUAL_UTILIZACAO.replace("{data_atual}", data_atual)
 
     with open("docs/manual_utilizacao.md", "w", encoding="utf-8") as f:
         f.write(conteudo_utilizacao)
