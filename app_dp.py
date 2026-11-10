@@ -2138,7 +2138,7 @@ else:
         st.header("📖 Manual do Sistema")
         try:
             data_str = datetime.now().strftime("%d/%m/%Y")
-            conteudo = MANUAL_UTILIZACAO.format(data_atual=data_str)
+            conteudo = MANUAL_UTILIZACAO.replace("{data_atual}", data_str)
             st.markdown(conteudo)
             
             st.divider()

@@ -997,7 +997,7 @@ def gerar_manuais():
 
     Path("docs").mkdir(exist_ok=True)
 
-    conteudo_utilizacao = MANUAL_UTILIZACAO.format(data_atual=data_atual)
+    conteudo_utilizacao = MANUAL_UTILIZACAO.replace("{data_atual}", data_atual)
 
     with open("docs/manual_utilizacao.md", "w", encoding="utf-8") as f:
         f.write(conteudo_utilizacao)
